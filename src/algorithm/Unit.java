@@ -6,6 +6,10 @@ import battlecode.common.MapInfo;
 import battlecode.common.MapLocation;
 import battlecode.common.RobotInfo;
 import battlecode.common.UnitType;
+import battlecode.common.RobotController;
+
+
+
 
 
 
@@ -57,17 +61,31 @@ public class Unit extends BaseRobot {
             UnitType.LEVEL_ONE_DEFENSE_TOWER
         };
 
+        // mengarahkan untuk melakukan pembuatan tower
         MapInfo[] nearbyTiles = rc.senseNearbyMapInfos(-1);
         for (MapInfo tile : nearbyTiles) {
             MapLocation buildLoc = tile.getMapLocation();
             for(UnitType tower : towersToBuild){
-                if (rc.canBuildRobot(tower, buildLoc)){
-                    rc.buildRobot(tower, buildLoc);
+                if (rc.canCompleteTowerPattern(tower, buildLoc)){
+                    rc.completeTowerPattern(tower, buildLoc);
+                    System.out.println("Tower built at " + buildLoc);
+                    return;
+                }
+            }
+            
+            // memberikan mark pada ruin yang ingin dibuat
+            if (tile.hasRuin() && !rc.canSenseRobotAtLocation(buildLoc)){
+            for(UnitType tower : towersToBuild){
+                if(rc.canMarkTowerPattern(tower, buildLoc)){
+                    rc.markTowerPattern(tower, buildLoc);
                     System.out.println("Tower built at " + buildLoc);
                     return;
                 }
             }
         }
+        }
+
+        
     }
 
     public static boolean refillPaint() throws GameActionException {
