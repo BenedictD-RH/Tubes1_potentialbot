@@ -1,6 +1,8 @@
 package algorithm;
 
-import algorithm.Units.*;
+import algorithm.Units.Mopper;
+import algorithm.Units.Soldier;
+import algorithm.Units.Splasher;
 import battlecode.common.Clock;
 import battlecode.common.GameActionException;
 import battlecode.common.RobotController;
@@ -19,6 +21,9 @@ public class RobotPlayer {
                         break;
                     case SOLDIER:
                         Soldier.run();
+                        break;
+                    case SPLASHER:
+                        Splasher.run();
                         break;
                     case LEVEL_ONE_PAINT_TOWER:
                     case LEVEL_ONE_MONEY_TOWER:
