@@ -11,6 +11,11 @@ public class Soldier extends Unit {
     
     public static void run() throws GameActionException {
         // Pindai semua informasi ubin/petak di dalam radius penglihatan
+        initUnit();
+        buildTower();
+        if(refillPaint()){
+            return;
+        }
         MapInfo[] nearbyTiles = rc.senseNearbyMapInfos(-1); 
         
         MapLocation bestTileToPaint = null;
