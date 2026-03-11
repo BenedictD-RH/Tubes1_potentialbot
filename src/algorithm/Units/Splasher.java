@@ -5,13 +5,19 @@ import battlecode.common.Direction;
 import battlecode.common.GameActionException;
 import battlecode.common.MapInfo;
 import battlecode.common.MapLocation;
+import battlecode.common.RobotInfo;
 
 
 
 public class Splasher extends Unit {
     
     public static void run() throws GameActionException{
-         // Pindai semua informasi ubin/petak di dalam radius penglihatan
+          // Pindai semua informasi ubin/petak di dalam radius penglihatan
+        RobotInfo[] enemies = rc.senseNearbyRobots(-1, rc.getTeam().opponent());
+        if (enemies.length > 0) {
+            broadcastEnemyTarget(enemies[0].getLocation());
+        }
+
         MapInfo[] nearbyTiles = rc.senseNearbyMapInfos(-1);
 
         MapLocation bestSplashTarget = null;
@@ -51,7 +57,12 @@ public class Splasher extends Unit {
         } 
         // eksplorasi
         else if (rc.isMovementReady()) {
-            wander();
+            MapLocation sosTarget = getBroadcastTarget();
+            if (sosTarget != null) {
+                move(sosTarget);
+            } else {
+                wander();
+            }
         }
     }
 

@@ -19,9 +19,10 @@ public class Mopper extends Unit {
         RobotInfo[] enemies = rc.senseNearbyRobots(-1,rc.getTeam().opponent());
         MapInfo[] nearbyTiles = rc.senseNearbyMapInfos(-1);
 
-        // PRIORITY 1: attack nearby enemies
+        // PRIORITY 1: attack nearby enemies + broadcast
         if(enemies.length > 0){
             MapLocation targetEnemy = enemies[0].getLocation();
+            broadcastEnemyTarget(targetEnemy);
             if (rc.isActionReady() && rc.canAttack(targetEnemy)) {
                 rc.attack(targetEnemy);
             } else if(rc.isMovementReady()){
@@ -53,7 +54,12 @@ public class Mopper extends Unit {
             }
         }
         else if(rc.isMovementReady()){
-            wander();
+            MapLocation sosTarget = getBroadcastTarget();
+            if (sosTarget != null) {
+                move(sosTarget);
+            } else {
+                wander();
+            }
         }
     }
 

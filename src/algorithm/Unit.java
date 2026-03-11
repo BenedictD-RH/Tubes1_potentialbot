@@ -4,9 +4,10 @@ import battlecode.common.Direction;
 import battlecode.common.GameActionException;
 import battlecode.common.MapInfo;
 import battlecode.common.MapLocation;
+import battlecode.common.Message;
 import battlecode.common.RobotInfo;
 import battlecode.common.UnitType;
-import battlecode.common.RobotController;
+
 
 
 
@@ -17,6 +18,12 @@ import battlecode.common.RobotController;
 public class Unit extends BaseRobot {
 
     public static MapLocation spawnLocation;
+    // Tag bit untuk menandai pesan broadcast kita agar tidak bentrok dengan pesan lain.
+    private static final int COMM_TAG = 0x80000000;
+    // Mask 10 bit untuk koordinat (0-1023).
+    private static final int COORD_MASK = 0x3FF;
+    // Mask 11 bit untuk ronde (0-2047).
+    private static final int ROUND_MASK = 0x7FF;
 
     public static void initUnit() {
         if(spawnLocation == null){
@@ -136,4 +143,55 @@ public class Unit extends BaseRobot {
         return true;
     }
 
+
+
+    // Broadcast lokasi musuh ke ally terdekat.
+    public static void broadcastEnemyTarget(MapLocation loc) throws GameActionException {
+        int msg = COMM_TAG
+            | ((rc.getRoundNum() & ROUND_MASK) << 20)
+            | ((loc.x & COORD_MASK) << 10)
+            | (loc.y & COORD_MASK);
+
+        RobotInfo[] allies = rc.senseNearbyRobots(-1, rc.getTeam());
+        for (RobotInfo ally : allies) {
+            MapLocation allyLoc = ally.getLocation();
+            if (rc.canSendMessage(allyLoc, msg)) {
+                rc.sendMessage(allyLoc, msg);
+            }
+        }
+    }
+
+    // Membaca broadcast terbaru.
+    public static MapLocation getBroadcastTarget() throws GameActionException {
+        Message[] messages = rc.readMessages(-1);
+        if (messages.length == 0) {
+            return null;
+        }
+
+        int bestRound = -1;
+        MapLocation bestLoc = null;
+        int current = rc.getRoundNum() & ROUND_MASK;
+
+        for (Message m : messages) {
+            int msg = m.getBytes();
+            if ((msg & COMM_TAG) == 0) {
+                continue;
+            }
+
+            int roundSent = (msg >> 20) & ROUND_MASK;
+            int age = (current - roundSent) & ROUND_MASK;
+            if (age < 10) {
+                int x = (msg >> 10) & COORD_MASK;
+                int y = msg & COORD_MASK;
+                if (roundSent > bestRound) {
+                    bestRound = roundSent;
+                    bestLoc = new MapLocation(x, y);
+                }
+            }
+        }
+
+        return bestLoc; // Mengembalikan null jika tidak ada sinyal darurat
+    }
 }
+
+

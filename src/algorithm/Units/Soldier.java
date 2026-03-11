@@ -14,6 +14,12 @@ public class Soldier extends Unit {
     public static void run() throws GameActionException{
         initUnit();
         buildTower();
+
+        RobotInfo[] enemies = rc.senseNearbyRobots(-1, rc.getTeam().opponent());
+        if (enemies.length > 0) {
+            broadcastEnemyTarget(enemies[0].getLocation());
+        }
+
         if(refillPaint()){
             return;
         }
@@ -69,7 +75,12 @@ public class Soldier extends Unit {
                 move(bestTileToPaint);
             }
         } else if (rc.isMovementReady()) {
-            wander();
+            MapLocation sosTarget = getBroadcastTarget();
+            if (sosTarget != null) {
+                move(sosTarget);
+            } else {
+                wander();
+            }
         }
     }
 
