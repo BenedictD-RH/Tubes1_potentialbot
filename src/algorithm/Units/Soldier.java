@@ -84,12 +84,4 @@ public class Soldier extends Unit {
         }
     }
 
-    private static void wander() throws GameActionException {
-        int randomIndex = (int) (Math.random() * directions.length);
-        Direction randomDir = directions[randomIndex];
-        
-        if (rc.canMove(randomDir)) {
-            rc.move(randomDir);
-        }
-    }
 }

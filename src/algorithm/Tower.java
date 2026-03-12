@@ -19,33 +19,31 @@ public class Tower extends BaseRobot {
                 MapLocation targetEnemy = enemies[0].getLocation();
                 if (rc.canAttack(targetEnemy)) {
                     rc.attack(targetEnemy);
-                    System.out.println("Defense tower attacked enemy at " + targetEnemy);
                     return;
                 }
             }
         }
 
-        // Upgrade system 
-        if (rc.getMoney() > 2500 && rc.isActionReady()) {
-            if (rc.canUpgradeTower(rc.getLocation())) {
-                rc.upgradeTower(rc.getLocation());
-                return;
-            }
+        if (rc.isActionReady() && rc.canUpgradeTower(rc.getLocation())) {
+            rc.upgradeTower(rc.getLocation());
+            return;
         }
 
-        // Robot production
-        if (rc.isActionReady() && rc.getMoney() >= 500) {
-            buildArmy();
+        if (rc.isActionReady()) {
+            boolean isSavingMoney = (rc.getRoundNum() > 200 && rc.getMoney() > 1000);
+            if (!isSavingMoney && rc.getMoney() >= 500) {
+                buildStrategicArmy();
+            }
         }
     }
 
-    private static void buildArmy() throws GameActionException {
+    private static void buildStrategicArmy() throws GameActionException {
         double rand = Math.random();
         UnitType typeToBuild;
 
-        if (rand < 0.50) {
+        if (rand < 0.65) {
             typeToBuild = UnitType.SOLDIER;
-        } else if (rand < 0.80) {
+        } else if (rand < 0.95) {
             typeToBuild = UnitType.SPLASHER;
         } else {
             typeToBuild = UnitType.MOPPER;

@@ -18,6 +18,8 @@ import battlecode.common.UnitType;
 public class Unit extends BaseRobot {
 
     public static MapLocation spawnLocation;
+    // Arah eksplorasi yang disimpan antar giliran
+    public static Direction currentExploreDirection = null;
     // Tag bit untuk menandai pesan broadcast kita agar tidak bentrok dengan pesan lain.
     private static final int COMM_TAG = 0x80000000;
     // Mask 10 bit untuk koordinat (0-1023).
@@ -191,6 +193,21 @@ public class Unit extends BaseRobot {
         }
 
         return bestLoc; // Mengembalikan null jika tidak ada sinyal darurat
+    }
+    
+    public static void wander() throws GameActionException {
+        if (!rc.isMovementReady()) return;
+
+        if (currentExploreDirection == null || !rc.canMove(currentExploreDirection)) {
+            int randomIndex = (int) (Math.random() * directions.length);
+            currentExploreDirection = directions[randomIndex];
+        }
+
+        if (rc.canMove(currentExploreDirection)) {
+            rc.move(currentExploreDirection);
+        } else {
+            currentExploreDirection = currentExploreDirection.rotateRight();
+        }
     }
 }
 

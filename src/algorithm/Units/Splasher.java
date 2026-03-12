@@ -1,7 +1,6 @@
 package algorithm.Units;
 
 import algorithm.Unit;
-import battlecode.common.Direction;
 import battlecode.common.GameActionException;
 import battlecode.common.MapInfo;
 import battlecode.common.MapLocation;
@@ -75,13 +74,5 @@ public class Splasher extends Unit {
             }
         }
         return score;
-    }
-
-    private static void wander() throws GameActionException {
-        int randomIndex = (int) (Math.random() * directions.length);
-        Direction randomDir = directions[randomIndex];
-        if( rc.canMove(randomDir)) {
-            rc.move(randomDir);
-        }
     }
 }
