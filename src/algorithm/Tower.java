@@ -43,7 +43,7 @@ public class Tower extends BaseRobot {
 
         if (rand < 0.45) {
             typeToBuild = UnitType.SOLDIER;
-        } else if (rand < 0.75) {
+        } else if (rand < 0.7) {
             typeToBuild = UnitType.MOPPER;
         } else {
             typeToBuild = UnitType.SPLASHER;

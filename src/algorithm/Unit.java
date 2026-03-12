@@ -15,6 +15,7 @@ import battlecode.common.UnitType;
 
 
 
+
 public class Unit extends BaseRobot {
 
     public static MapLocation spawnLocation;
@@ -208,6 +209,98 @@ public class Unit extends BaseRobot {
         } else {
             currentExploreDirection = currentExploreDirection.rotateRight();
         }
+    }
+public static boolean tryBuildTower() throws GameActionException {
+        MapLocation myLoc = rc.getLocation();
+
+        MapInfo[] nearbyTiles = rc.senseNearbyMapInfos(-1);
+        MapLocation targetRuin = null;
+        int minDistance = Integer.MAX_VALUE;
+
+        // Cari ruin terdekat
+        for (MapInfo tile : nearbyTiles) {
+            if (!tile.hasRuin()) continue;
+            MapLocation ruinLoc = tile.getMapLocation();
+
+            if (rc.canSenseRobotAtLocation(ruinLoc)) {
+                RobotInfo robotAtRuin = rc.senseRobotAtLocation(ruinLoc);
+                if (robotAtRuin != null && robotAtRuin.getType().isTowerType()) {
+                    continue; 
+                }
+            }
+
+            int dist = myLoc.distanceSquaredTo(ruinLoc);
+            if (dist < minDistance) {
+                minDistance = dist;
+                targetRuin = ruinLoc;
+            }
+        }
+
+        if (targetRuin == null) {
+            return false; 
+        }
+
+        int totalTowers = rc.getNumberTowers();
+        int chips = rc.getMoney();
+        int paint = rc.getPaint();
+        UnitType towerToBuild;
+
+        // Prioritas tower
+        if (totalTowers < 3) {
+            towerToBuild = UnitType.LEVEL_ONE_MONEY_TOWER;
+        } else if (totalTowers < 5) {
+            towerToBuild = UnitType.LEVEL_ONE_PAINT_TOWER;
+        } 
+        else if(totalTowers < 7){
+            towerToBuild = UnitType.LEVEL_ONE_MONEY_TOWER;
+        }
+        else if(totalTowers <= 8){
+            towerToBuild = UnitType.LEVEL_ONE_PAINT_TOWER;
+        }
+        else {
+            if (totalTowers > 14) {
+                towerToBuild = UnitType.LEVEL_ONE_DEFENSE_TOWER;
+            } else if (paint > 1000 && chips < 1000) {
+                towerToBuild = UnitType.LEVEL_ONE_MONEY_TOWER;
+            } else if (chips > 1500 && paint < 1000) {
+                towerToBuild = UnitType.LEVEL_ONE_PAINT_TOWER;
+            }
+            else {
+                towerToBuild = UnitType.LEVEL_ONE_MONEY_TOWER;
+            }
+        }
+        int requiredChips;
+        if (towerToBuild == UnitType.LEVEL_ONE_DEFENSE_TOWER) {
+            requiredChips = 2500;
+        } else {
+            requiredChips = 1000;
+        }
+        
+        if (chips < requiredChips) {
+            if (myLoc.distanceSquaredTo(targetRuin) <= 2 && chips >= requiredChips - 200) {
+                return true; 
+            }
+            return false; 
+        }
+
+        if (rc.canCompleteTowerPattern(towerToBuild, targetRuin)) {
+            rc.completeTowerPattern(towerToBuild, targetRuin);
+            return true; 
+        }
+
+        if (rc.canMarkTowerPattern(towerToBuild, targetRuin)) {
+            rc.markTowerPattern(towerToBuild, targetRuin);
+        }
+
+        // Bergerak ke ruin
+        if (myLoc.distanceSquaredTo(targetRuin) > 2) {
+            if (rc.isMovementReady()) {
+                move(targetRuin);
+                return true; 
+            }
+        }
+
+        return false; 
     }
 }
 

@@ -1,19 +1,20 @@
 package algorithm.Units;
 
 import algorithm.Unit;
-import battlecode.common.Direction;
 import battlecode.common.GameActionException;
 import battlecode.common.MapInfo;
 import battlecode.common.MapLocation;
 import battlecode.common.PaintType;
-import battlecode.common.*;
+import battlecode.common.RobotInfo;
 
 
 public class Soldier extends Unit {
     
     public static void run() throws GameActionException{
         initUnit();
-        buildTower();
+        if (tryBuildTower()) {
+            return; 
+        }
 
         RobotInfo[] enemies = rc.senseNearbyRobots(-1, rc.getTeam().opponent());
         if (enemies.length > 0) {

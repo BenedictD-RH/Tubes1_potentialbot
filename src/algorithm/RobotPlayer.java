@@ -26,15 +26,30 @@ public class RobotPlayer {
                         Splasher.run();
                         break;
                     case LEVEL_ONE_PAINT_TOWER:
+                        Tower.run();
+                        break;
                     case LEVEL_ONE_MONEY_TOWER:
+                        Tower.run();
+                        break;
                     case LEVEL_ONE_DEFENSE_TOWER:
+                        Tower.run();
+                        break;
                     case LEVEL_TWO_PAINT_TOWER:
+                        Tower.run();
+                        break;
                     case LEVEL_TWO_MONEY_TOWER:
+                        Tower.run();
+                        break;
                     case LEVEL_TWO_DEFENSE_TOWER:
+                        Tower.run();
+                        break;
                     case LEVEL_THREE_PAINT_TOWER:
+                        Tower.run();
+                        break;
                     case LEVEL_THREE_MONEY_TOWER:
+                        Tower.run();
+                        break;
                     case LEVEL_THREE_DEFENSE_TOWER:
-                        
                         Tower.run();
                         break;
 
