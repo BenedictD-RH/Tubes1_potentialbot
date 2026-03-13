@@ -36,7 +36,7 @@ public class RobotPlayer {
                 switch (rc.getType()) {
                     case SOLDIER:  Soldier.runSoldier(rc); break;
                     case MOPPER:   Mopper.runMopper(rc);   break;
-                    case SPLASHER: break;
+                    case SPLASHER: Splasher.runSplasher(rc); break;
                     default:       Tower.runTower(rc);     break;
                 }
             } catch (GameActionException e) {
