@@ -41,24 +41,36 @@ public class Tower {
     // EXECUTE: Build soldiers and moppers
     private static void executeBuild(RobotController rc) throws GameActionException {
 
+        if (rc.getChips() < 1300) return; // 1000 tower reserve + 300 buffer
+
         RobotInfo[] nearbyAllies = rc.senseNearbyRobots(-1, rc.getTeam());
-        int soldierCount = 0;
-        int mopperCount  = 0;
+        int soldierCount  = 0;
+        int mopperCount   = 0;
+        int splasherCount = 0;
 
         for (RobotInfo r : nearbyAllies) {
-            if (r.getType() == UnitType.SOLDIER)     soldierCount++;
-            else if (r.getType() == UnitType.MOPPER) mopperCount++;
+            if (r.getType() == UnitType.SOLDIER)       soldierCount++;
+            else if (r.getType() == UnitType.MOPPER)   mopperCount++;
+            else if (r.getType() == UnitType.SPLASHER) splasherCount++;
         }
+
+        
+        // Scale with map size — bigger map needs more soldiers
+        int mapSize = rc.getMapWidth() * rc.getMapHeight();
+        boolean lateGame  = rc.getRoundNum() > 500;
+        boolean bigMap    = mapSize > 1600;
+
+        int soldierTarget  = bigMap ? (lateGame ? 2 : 3) : (lateGame ? 3 : 5);
+        int splasherTarget = bigMap ? (lateGame ? 1 : 0) : (lateGame ? 2 : 0);
+        int mopperTarget   = bigMap ? 2 : 3;
 
         UnitType toBuild = null;
 
-        if (soldierCount < 5) {
-            toBuild = UnitType.SOLDIER;
-        } else if (mopperCount < 3) {
-            toBuild = UnitType.MOPPER;
-        }
+        if (lateGame && splasherCount < splasherTarget)  toBuild = UnitType.SPLASHER;
+        else if (soldierCount < soldierTarget)           toBuild = UnitType.SOLDIER;
+        else if (mopperCount  < mopperTarget)            toBuild = UnitType.MOPPER;
 
-        if (toBuild == null || rc.getChips() < 300) return;
+        if (toBuild == null) return;
 
         for (Direction d : RobotPlayer.directions) {
             MapLocation loc = rc.getLocation().add(d);

@@ -64,4 +64,24 @@ public class LocationMemory {
         }
         return currNearest;
     }
+
+    public void printLocations(String s) {
+        System.out.print(s + "\n");
+        for (int i = 0; i < amountSaved;i ++) {
+            System.out.println("[" + savedLocations[i].x + ", " + savedLocations[i].y + "]");
+        }
+    }
+
+    public boolean doMemoryIntersect(LocationMemory lm) {
+        boolean found = false;
+        for (int i = 0; i < this.amountSaved; i++) {
+            found = lm.isLocationInMemory(savedLocations[i]);
+            if (found) break;
+        }
+        return found;
+    }
+
+    public void printLocations() {
+        printLocations("");
+    }
 }

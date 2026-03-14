@@ -23,13 +23,11 @@ public class RobotPlayer {
     static int mapHeight;
     static boolean mapDimensionFound = false;
 
-    static private int cornerIdx = rng.nextInt(8);
+    static private int cornerIdx = rng.nextInt(4);
 
     static private LocationMemory knownTTL = new LocationMemory();
 
     static private LocationMemory knownETL = new LocationMemory();
-
-    static private LocationMemory teamTowerLocations = new LocationMemory();
 
     static private LocationMemory enemyTowerLocations = new LocationMemory();
 
@@ -42,6 +40,16 @@ public class RobotPlayer {
     static private boolean towerPatternComplete = false;
 
     static private int robotRole = 0;
+
+    static private int lastReport = -1;
+
+    static private boolean sendMoppers = false;
+
+    static private boolean buildManager = false;
+
+    static private boolean buildBuilder = false;
+
+    static private int towerDestIdx = 0;
 
     static final Direction[] directions = {
         Direction.NORTH,
@@ -61,20 +69,23 @@ public class RobotPlayer {
         System.out.println("I'm alive");
         boolean scout = false;
         rc.setIndicatorString("Hello world!");
+
         while (true) {
             
             turnCount += 1;  
-            
+            if (turnCount <= 2) {
+                if (rc.getType().isTowerType()) {
+                    if (rc.canBroadcastMessage()) {
+                        rc.broadcastMessage(encodeOwnTowerLocation(rc));
+                        System.out.println("Broadcasted Self");
+                    }
+                }
+            }
             try {
                 switch (rc.getType()){
                     case SOLDIER:
                         rc.setIndicatorString(Integer.toString(robotRole));
-                        Message[] m = rc.readMessages(-1);
-                        for (int i = 0; i < m.length; i++) {
-                            int message = m[i].getBytes();
-                            decodeMessage(message);
-                        }
-                        
+                        readAndDecodeMessages(rc);
                         if (robotRole == 0) {
                             completeTowerMark(rc);
                         }
@@ -87,13 +98,18 @@ public class RobotPlayer {
                         else if (robotRole == 3) {
                             messageBackToTower(rc);
                         }
+                        else if (robotRole == 4) {
+                            manageTowers(rc);
+                        }
                         else {
                             System.out.println("how bro : "  + robotRole);
                         }
                         break; 
                     case MOPPER: runMopper(rc); break;
                     case SPLASHER: break; 
-                    default: runTower(rc); break;
+                    default: 
+                            runTower(rc); 
+                        break;
                     }
                 }
              catch (GameActionException e) {
@@ -122,6 +138,9 @@ public class RobotPlayer {
 
    
     public static void runTower(RobotController rc) throws GameActionException{
+        if (turnCount % 50 == 0) {
+            knownTTL.printLocations("Known Team Towers");
+        }
         if (!mapDimensionFound) {
             int i = 60;
             MapLocation towerLoc = rc.getLocation();
@@ -156,50 +175,72 @@ public class RobotPlayer {
         for (int i = 0; i < recievedMessages.length; i++) {
             int message = recievedMessages[i].getBytes();
             mType = decodeMessage(message);
+            if (mType == 96) {
+                lastReport = turnCount;
+            }
         }
+
+        if ((turnCount - lastReport > 300) && lastReport != -1) {
+            sendMoppers = true;
+            //System.out.println("SEND MOPPERS NOW!");
+        }
+
         Direction dir = directions[rng.nextInt(directions.length)];
         MapLocation nextLoc = rc.getLocation().add(dir);
         
-        int robotType = 0;
-        if (robotType == 0 && rc.canBuildRobot(UnitType.SOLDIER, nextLoc)){
-            rc.buildRobot(UnitType.SOLDIER, nextLoc);
-            System.out.println("BUILT A SOLDIER");
+        if ((turnCount - 50) % 500 == 0) {
+            buildManager = true;
+            System.out.println("SEND MANAGER");
+        }
+        if (isPaintTower(rc)) {
+            if ((!sendMoppers) && rc.canBuildRobot(UnitType.SOLDIER, nextLoc)){
+                rc.buildRobot(UnitType.SOLDIER, nextLoc);
+                System.out.println("BUILT A SOLDIER");
 
-            if (rc.canSendMessage(nextLoc)) {
-                if (knownETL.amountSaved == 0) {
-                    rc.sendMessage(nextLoc, encodeScoutInfo());
+                if (rc.canSendMessage(nextLoc)) {
+                    if (buildManager) {
+                        rc.sendMessage(nextLoc, 10000004);
+                        buildManager = false;
+                        sendTowerLocationsTo(rc, nextLoc, 92);
+                    }
+                    else if (knownETL.amountSaved == 0) {
+                        rc.sendMessage(nextLoc, encodeScoutInfo());
+                    }
+                    else {
+                        rc.sendMessage(nextLoc, encodeRusherInfo(knownETL.savedLocations[0]));
+                        System.out.println("Rush now");
+                    }
+                    sendTowerLocationsTo(rc, nextLoc, 97);
                 }
-                else {
-                    rc.sendMessage(nextLoc, encodeRusherInfo(knownETL.savedLocations[0]));
-                }
-                sendTowerLocationsTo(rc, nextLoc, 97);
-                sendTowerLocationsTo(rc, nextLoc, 92);
             }
-        }
-        else if (robotType == 1 && rc.canBuildRobot(UnitType.MOPPER, nextLoc)){
-            rc.buildRobot(UnitType.MOPPER, nextLoc);
-            System.out.println("BUILT A MOPPER");
-        }
-        else if (robotType == 2 && rc.canBuildRobot(UnitType.SPLASHER, nextLoc)){
-            
-            
-            rc.setIndicatorString("SPLASHER NOT IMPLEMENTED YET");
-        }
-        RobotInfo[] nearbyRobots = rc.senseNearbyRobots();
-        for (RobotInfo robot : nearbyRobots) {
-
-            if (rc.canSendMessage(robot.getLocation())) {
-                if (knownETL.amountSaved > 0) {
-                    
-                    rc.sendMessage(robot.getLocation(), encodeRusherInfo(knownETL.savedLocations[0]));
+            else if (sendMoppers && rc.canBuildRobot(UnitType.MOPPER, nextLoc)){
+                rc.buildRobot(UnitType.MOPPER, nextLoc);
+                if (rc.canSendMessage(nextLoc)) {
+                    rc.sendMessage(nextLoc, encodeMopperInfo());
                 }
-                else if (towerPatternComplete){
-                    rc.sendMessage(robot.getLocation(), encodeScoutInfo());
+            }
+            RobotInfo[] nearbyRobots = rc.senseNearbyRobots();
+            for (RobotInfo robot : nearbyRobots) {
+
+                if (rc.canSendMessage(robot.getLocation())) {
+                    if (knownETL.amountSaved > 0) {
+                        
+                        rc.sendMessage(robot.getLocation(), encodeRusherInfo(knownETL.savedLocations[0]));
+                    }
+                    else if (towerPatternComplete){
+                        rc.sendMessage(robot.getLocation(), encodeScoutInfo());
+                    }
                 }
             }
         }
         if (rc.getType() == UnitType.LEVEL_ONE_MONEY_TOWER || rc.getType() == UnitType.LEVEL_TWO_MONEY_TOWER || rc.getType() == UnitType.LEVEL_THREE_MONEY_TOWER) {
             rc.setIndicatorString(Integer.toString(rc.getMoney()));
+            if (rc.canBuildRobot(UnitType.SOLDIER, nextLoc) && buildManager && !isTowerMaxLevel(rc)) {
+                rc.buildRobot(UnitType.SOLDIER, nextLoc);
+                rc.sendMessage(nextLoc, 10000004);
+                buildManager = false;
+                sendTowerLocationsTo(rc, nextLoc, 92);
+            }
         }
         
         Message[] messages = rc.readMessages(-1);
@@ -214,24 +255,32 @@ public class RobotPlayer {
     public static void runSoldier(RobotController rc) throws GameActionException{
         scoutMap(rc);
     }
-
+    
 
     public static void runMopper(RobotController rc) throws GameActionException{
-        
-        Direction dir = directions[rng.nextInt(directions.length)];
-        MapLocation nextLoc = rc.getLocation().add(dir);
-        if (rc.canMove(dir)){
-            rc.move(dir);
+        readAndDecodeMessages(rc);
+        MapLocation[] mapCorners = {
+            new MapLocation(0, 0),
+            new MapLocation(mapWidth, 0),
+            new MapLocation(mapWidth, mapHeight),
+            new MapLocation(0,mapHeight)
+        };
+
+        if(rc.canSenseLocation(mapCorners[cornerIdx])) {
+            cornerIdx = (cornerIdx + 1) % 4;
         }
+        RobotMovement.mopperMove(rc, mapCorners[cornerIdx]);
+        Direction dir = directions[rng.nextInt(directions.length)];
         if (rc.canMopSwing(dir)){
             rc.mopSwing(dir);
             System.out.println("Mop Swing! Booyah!");
         }
-        else if (rc.canAttack(nextLoc)){
-            rc.attack(nextLoc);
+        else {
+            MapInfo currentTile = rc.senseMapInfo(rc.getLocation());
+            if (currentTile.getPaint().isEnemy() && rc.canAttack(rc.getLocation())){
+                rc.attack(rc.getLocation());
+            }
         }
-        
-        updateEnemyRobots(rc);
     }
 
     public static void updateEnemyRobots(RobotController rc) throws GameActionException {
@@ -255,29 +304,6 @@ public class RobotPlayer {
         }
     }
 
-    private static void smartMove(RobotController rc, MapLocation targetLocation) throws GameActionException {
-        Direction dir1 = rc.getLocation().directionTo(targetLocation);
-            int dir1Idx = 0;
-            for (int i = 0; i < directions.length;i++) {
-                if (dir1 == directions[i]) dir1Idx = i;
-            }
-            if (rc.canMove(dir1)) {
-                rc.move(dir1);
-            }
-            else {
-                int i = 1;
-                while (!rc.canMove(directions[Math.floorMod((dir1Idx + i), directions.length)])) {
-                    if (i > 0) {
-                        i*= -1;
-                    }
-                    else {
-                        i = i* - 1 + 1;
-                    }
-                }
-                rc.move(directions[Math.floorMod((dir1Idx + i), directions.length)]);
-            }
-    }
-
 
     public static void rushTower(RobotController rc, MapLocation towerLocation) throws GameActionException {
         boolean found = false;
@@ -296,7 +322,7 @@ public class RobotPlayer {
                 robotRole = 3;
             }
             else {
-                smartMove(rc, towerLocation);
+                RobotMovement.smartMove(rc, towerLocation);
                 MapInfo currentTile = rc.senseMapInfo(rc.getLocation());
                 if (!currentTile.getPaint().isAlly() && rc.canAttack(rc.getLocation())){
                     rc.attack(rc.getLocation());
@@ -311,19 +337,15 @@ public class RobotPlayer {
         if (!goBackToTower) {
             MapLocation[] mapCorners = {
                 new MapLocation(0, 0),
-                new MapLocation(mapWidth/2, 0),
                 new MapLocation(mapWidth, 0),
-                new MapLocation(mapWidth, mapHeight/2),
                 new MapLocation(mapWidth, mapHeight),
-                new MapLocation(mapWidth/2,mapHeight),
-                new MapLocation(0,mapHeight),
-                new MapLocation(0,mapHeight/2)
+                new MapLocation(0,mapHeight)
             };
 
             if(rc.canSenseLocation(mapCorners[cornerIdx])) {
-                cornerIdx = (cornerIdx + 1) % 8;
+                cornerIdx = (cornerIdx + 1) % 4;
             }
-            smartMove(rc, mapCorners[cornerIdx]);
+            RobotMovement.smartMove(rc, mapCorners[cornerIdx]);
         }
         else {
             messageBackToTower(rc);
@@ -336,21 +358,90 @@ public class RobotPlayer {
     }
 
     public static void messageBackToTower(RobotController rc) throws GameActionException {
-        smartMove(rc, teamTowerLocations.nearestLocationTo(rc.getLocation()));
+        RobotMovement.smartMove(rc, knownTTL.nearestLocationTo(rc.getLocation()));
         RobotInfo[] nearbyRobots = rc.senseNearbyRobots();
         for (int i = 0; i < nearbyRobots.length;i++) {
             if (nearbyRobots[i].team == rc.getTeam() && nearbyRobots[i].type.isTowerType()) {
                 if (rc.canSendMessage(nearbyRobots[i].getLocation())) {
                     sendTowerLocationsTo(rc, nearbyRobots[i].getLocation(), 99);
                     sendTowerLocationsTo(rc, nearbyRobots[i].getLocation(), 96);
-                    sendTowerLocationsTo(rc, nearbyRobots[i].getLocation(), 94);
                 }
             }
         }
     }
 
+    public static boolean isTowerMaxLevel(RobotInfo robot) {
+        if (robot.getType() == UnitType.LEVEL_THREE_DEFENSE_TOWER || 
+            robot.getType() == UnitType.LEVEL_THREE_MONEY_TOWER ||
+            robot.getType() == UnitType.LEVEL_THREE_PAINT_TOWER) {
+            return true;
+        }
+        else {
+            return false;
+        }
+    }
+
+    public static boolean isTowerMaxLevel(RobotController robot) {
+        if (robot.getType() == UnitType.LEVEL_THREE_DEFENSE_TOWER || 
+            robot.getType() == UnitType.LEVEL_THREE_MONEY_TOWER ||
+            robot.getType() == UnitType.LEVEL_THREE_PAINT_TOWER) {
+            return true;
+        }
+        else {
+            return false;
+        }
+    }
+
+    public static boolean isPaintTower(RobotController rc) {
+        if (rc.getType() == UnitType.LEVEL_ONE_PAINT_TOWER || 
+            rc.getType() == UnitType.LEVEL_TWO_PAINT_TOWER ||
+            rc.getType() == UnitType.LEVEL_THREE_PAINT_TOWER) {
+            return true;
+        }
+        else {
+            return false;
+        }
+    }
+
     public static void manageTowers(RobotController rc) throws GameActionException {
-        
+        if (turnCount % 50 == 0) {
+            knownTTL.printLocations("Known Team Towers");
+        }
+        RobotInfo[] nearbyRobots = rc.senseNearbyRobots();
+        boolean move = true;
+        for (RobotInfo robot : nearbyRobots) {
+            if (robot.getType().isTowerType()) {
+                if (rc.canUpgradeTower(robot.getLocation())) {
+                    if (rc.getLocation().distanceSquaredTo(robot.getLocation()) >= 8) {
+                        Direction dir = rc.getLocation().directionTo(robot.getLocation());
+                        if (rc.canMove(dir)) {
+                            rc.move(dir);
+                        }
+                    }
+                    rc.upgradeTower(robot.getLocation());
+                }
+                else if (isTowerMaxLevel(robot)) {
+                    towerDestIdx += (towerDestIdx +  1) % knownTTL.amountSaved;
+                }
+                else {
+                    move = false;
+                    if (rc.getLocation().distanceSquaredTo(robot.getLocation()) <= 8) {
+                        Direction dir = rc.getLocation().directionTo(robot.getLocation());
+                        dir = dir.rotateRight().rotateRight().rotateRight().rotateRight();
+                        if (rc.canMove(dir)) {
+                            rc.move(dir);
+                        }
+                    }
+                }
+            }
+        }
+        if (move) {
+            RobotMovement.smartMove(rc, knownTTL.savedLocations[towerDestIdx]);
+        }
+        MapInfo currentTile = rc.senseMapInfo(rc.getLocation());
+        if (!currentTile.getPaint().isAlly() && rc.canAttack(rc.getLocation())){
+            rc.attack(rc.getLocation());
+        }
     }
 
     public static void completeTowerMark(RobotController rc) throws GameActionException {
@@ -389,10 +480,18 @@ public class RobotPlayer {
                 System.out.println("Tower Mark Completed");
             }
             else {
-                smartMove(rc, curLoc.add(dir.rotateLeft().rotateLeft()));
+                RobotMovement.smartMove(rc, curLoc.add(dir.rotateLeft().rotateLeft()));
             }
         }
     }
+
+    public static void readAndDecodeMessages(RobotController rc) {
+        Message[] m = rc.readMessages(-1);
+        for (int i = 0; i < m.length; i++) {
+            int message = m[i].getBytes();
+            decodeMessage(message);
+        }
+}
 
     private static int encodeScoutInfo() {
         String numString = "1";
@@ -400,6 +499,15 @@ public class RobotPlayer {
         numString += mapHeight;
         numString += rng.nextInt(4);
         numString += "01";
+        return Integer.valueOf(numString);
+    }
+
+        private static int encodeMopperInfo() {
+        String numString = "1";
+        numString += mapWidth;
+        numString += mapHeight;
+        numString += rng.nextInt(4);
+        numString += "05";
         return Integer.valueOf(numString);
     }
 
@@ -423,20 +531,48 @@ public class RobotPlayer {
         return Integer.valueOf(numString);
     }
 
+    private static int encodeOwnTowerLocation(RobotController rc) {
+        String numString = "1";
+        MapLocation selfLoc = rc.getLocation();
+        if (selfLoc.x < 10) numString += "0";
+        numString += selfLoc.x;
+        if (selfLoc.y < 10) numString += "0";
+        numString += selfLoc.y;
+        int z;
+        switch(rc.getType()) {
+            case LEVEL_ONE_DEFENSE_TOWER : z = 1; break;
+            case LEVEL_ONE_PAINT_TOWER : z = 2; break;
+            case LEVEL_ONE_MONEY_TOWER : z = 3; break;
+            case LEVEL_TWO_DEFENSE_TOWER : z = 4; break;
+            case LEVEL_TWO_PAINT_TOWER : z = 5; break;
+            case LEVEL_TWO_MONEY_TOWER : z = 6; break;
+            case LEVEL_THREE_DEFENSE_TOWER : z = 7; break;
+            case LEVEL_THREE_PAINT_TOWER : z = 8; break;
+            case LEVEL_THREE_MONEY_TOWER : z = 9; break;
+            default : z = 0; break;
+        }
+        numString += z; 
+        numString += "93";
+        return Integer.valueOf(numString);
+    }
+
     private static int decodeMessage(int message) {
         String numString = Integer.toString(message);
         int messageType = Integer.valueOf(numString.substring(numString.length() - 2));
-        if (messageType == 1) {
+        if ((messageType == 1 || messageType == 5) && robotRole != 4) {
             mapWidth = Integer.valueOf(numString.substring(1,3));
             mapHeight = Integer.valueOf(numString.substring(3,5));
             mapDimensionFound = true;
             cornerIdx = numString.charAt(5) - '0';
             robotRole = messageType;
         }
-        else if (messageType == 2) {
+        else if (messageType == 2 && robotRole != 4) {
             int enemyTowerX = Integer.valueOf(numString.substring(1,3));
             int enemyTowerY = Integer.valueOf(numString.substring(3,5));
             targetTower = new MapLocation(enemyTowerX, enemyTowerY);
+            robotRole = messageType;
+        }
+        else if (messageType == 4) {
             robotRole = messageType;
         }
         else if (messageType == 99 || messageType == 98 || messageType == 97) {
@@ -460,12 +596,14 @@ public class RobotPlayer {
 
     public static void updateLocationMemory(RobotController rc) throws GameActionException {
         RobotInfo[] nearbyRobots = rc.senseNearbyRobots();
+        if (rc.getType().isTowerType() && !knownTTL.isLocationInMemory(rc.getLocation())) {
+            knownTTL.saveLocation(rc.getLocation());
+        }
         for (int i = 0; i < nearbyRobots.length; i++) {
             if (nearbyRobots[i].type.isTowerType()) {
                 if (nearbyRobots[i].team == rc.getTeam()) {
-                    if (!knownTTL.isLocationInMemory(nearbyRobots[i].getLocation()) &&
-                        !teamTowerLocations.isLocationInMemory(nearbyRobots[i].getLocation())) {
-                        teamTowerLocations.saveLocation(nearbyRobots[i].getLocation());
+                    if (!knownTTL.isLocationInMemory(nearbyRobots[i].getLocation())) {
+                        knownTTL.saveLocation(nearbyRobots[i].getLocation());
                     }
                 }
                 else {
@@ -504,16 +642,6 @@ public class RobotPlayer {
                 destroyedETL.removeLocation(destroyedETL.savedLocations[0]);
             }
             if (destroyedETL.amountSaved <= 0) {
-                goBackToTower = false;
-            }
-        }
-        else if (mType == 94) {
-            while (teamTowerLocations.amountSaved > 0 && rc.canSendMessage(m)) {
-                rc.sendMessage(m, encodeTowerLocations(teamTowerLocations.savedLocations[0], mType));
-                knownTTL.saveLocation(teamTowerLocations.savedLocations[0]);
-                teamTowerLocations.removeLocation(teamTowerLocations.savedLocations[0]);
-            }
-            if (teamTowerLocations.amountSaved <= 0) {
                 goBackToTower = false;
             }
         }

@@ -11,7 +11,7 @@ import battlecode.common.RobotInfo;
 public class Splasher extends Unit {
     
     public static void run() throws GameActionException{
-          // Pindai semua informasi ubin/petak di dalam radius penglihatan
+        // Pindai semua informasi ubin/petak di dalam radius penglihatan
         RobotInfo[] enemies = rc.senseNearbyRobots(-1, rc.getTeam().opponent());
         if (enemies.length > 0) {
             broadcastEnemyTarget(enemies[0].getLocation());
@@ -65,11 +65,25 @@ public class Splasher extends Unit {
         }
     }
 
-    private static int evaluateSplashTarget (MapLocation center) throws GameActionException {
+    private static int evaluateSplashTarget(MapLocation center) throws GameActionException {
         int score = 0;
         MapInfo[] splashArea = rc.senseNearbyMapInfos(center, 2);
-        for(MapInfo tile : splashArea) {
-            if (!tile.getPaint().isAlly() && tile.isPassable()){
+        
+        for (MapInfo tile : splashArea) {
+            MapLocation loc = tile.getMapLocation();
+            
+            // Cek apakah ada musuh yang berdiri di petak ini
+            if (rc.canSenseRobotAtLocation(loc)) {
+                RobotInfo bot = rc.senseRobotAtLocation(loc);
+                if (bot.getTeam() == rc.getTeam().opponent()) {
+                    if (bot.getType().isTowerType()) {
+                        score += 20;
+                    } else {
+                        score += 5; 
+                    }
+                }
+            }
+            if (!tile.getPaint().isAlly() && tile.isPassable()) {
                 score++;
             }
         }
