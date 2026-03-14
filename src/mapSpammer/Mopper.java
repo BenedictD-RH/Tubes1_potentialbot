@@ -8,10 +8,10 @@ public class Mopper {
 
         MapLocation myLoc = rc.getLocation();
 
-        // GREEDY: Scoring best move
+        // GREEDY: Scoring
         Direction bestMove = scoreBestMove(rc, myLoc);
 
-        // EXECUTE GREEDY ACTION
+        // EXECUTE
         if (bestMove != null && rc.isMovementReady()) {
             rc.move(bestMove);
             myLoc = rc.getLocation();
@@ -23,23 +23,19 @@ public class Mopper {
 
     // SCORING: Closest enemy paint location
     private static MapLocation findClosestEnemyPaint(RobotController rc, MapLocation myLoc) throws GameActionException {
-
         MapLocation closest = null;
         int closestDist = Integer.MAX_VALUE;
 
         for (MapLocation loc : rc.getAllLocationsWithinRadiusSquared(myLoc, GameConstants.VISION_RADIUS_SQUARED)) {
-            try {
-                MapInfo info = rc.senseMapInfo(loc);
-                if (info.getPaint().isEnemy()) {
-                    int d = myLoc.distanceSquaredTo(loc);
-                    if (d < closestDist) {
-                        closestDist = d;
-                        closest = loc;
-                    }
+            MapInfo info = rc.senseMapInfo(loc);
+            if (info.getPaint().isEnemy()) {
+                int d = myLoc.distanceSquaredTo(loc);
+                if (d < closestDist) {
+                    closestDist = d;
+                    closest = loc;
                 }
-            } catch (Exception ignored) {}
+            }
         }
-
         return closest;
     }
 
@@ -95,46 +91,45 @@ public class Mopper {
 
         if (!rc.isActionReady()) return;
 
-        RobotInfo[] enemies = rc.senseNearbyRobots(-1, rc.getTeam().opponent());
-        if (enemies.length > 0) {
-            Direction bestSwing    = null;
-            int bestSwingScore     = Integer.MIN_VALUE;
-            Direction[] cardinals = {
-                Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST
-            };
-            for (Direction d : cardinals) {
-                // mopSwing only works in 4 cardinal directions
-                if (!rc.canMopSwing(d)) continue;
+        Direction bestSwing    = null;
+        int bestSwingScore     = Integer.MIN_VALUE;
 
-                int score = 0;
-                // Count enemies in this swing direction (2 tiles deep, 3 wide)
-                MapLocation step1 = myLoc.add(d);
-                MapLocation step2 = step1.add(d);
+        Direction[] cardinals = {
+            Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST
+        };
 
-                for (RobotInfo enemy : enemies) {
-                    MapLocation eLoc = enemy.getLocation();
-                    if (eLoc.distanceSquaredTo(step1) <= 1 ||
-                        eLoc.distanceSquaredTo(step2) <= 1) {
-                        score += 50;
-                    }
-                }
+        for (Direction d : cardinals) {
+            // mopSwing only works in 4 cardinal directions
+            if (!rc.canMopSwing(d)) continue;
 
-                if (score > bestSwingScore) {
-                    bestSwingScore = score;
-                    bestSwing = d;
+            int score = 0;
+            // Count enemies in this swing direction (2 tiles deep, 3 wide)
+            MapLocation step1 = myLoc.add(d);
+            MapLocation step2 = step1.add(d);
+
+            for (RobotInfo enemy : rc.senseNearbyRobots(-1, rc.getTeam().opponent())) {
+                MapLocation eLoc = enemy.getLocation();
+                if (eLoc.distanceSquaredTo(step1) <= 1 ||
+                    eLoc.distanceSquaredTo(step2) <= 1) {
+                    score += 50;
                 }
             }
 
-            if (bestSwing != null && bestSwingScore > 0) {
-                rc.mopSwing(bestSwing);
-                return;
+            if (score > bestSwingScore) {
+                bestSwingScore = score;
+                bestSwing = d;
             }
         }
+
+        if (bestSwing != null && bestSwingScore > 0) {
+            rc.mopSwing(bestSwing);
+            return;
+        }
+
         MapLocation bestFill = null;
         int bestFillScore = Integer.MIN_VALUE;
 
         for (MapLocation loc : rc.getAllLocationsWithinRadiusSquared(myLoc, 2)) {
-
             if (!rc.canAttack(loc)) continue;
 
             MapInfo info = rc.senseMapInfo(loc);
@@ -168,7 +163,8 @@ public class Mopper {
         if (rc.getPaint() < 20) return; // keep some for self
 
         for (RobotInfo ally : rc.senseNearbyRobots(2, rc.getTeam())) {
-            if (ally.getType() == UnitType.SOLDIER && ally.getPaintAmount() < 100) {
+            if (ally.getType() == UnitType.MOPPER) continue;
+            if (ally.getPaintAmount() < 150) {
                 if (rc.canTransferPaint(ally.getLocation(), 30)) {
                     rc.transferPaint(ally.getLocation(), 30);
                     return;
