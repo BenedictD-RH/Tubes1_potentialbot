@@ -1,6 +1,6 @@
-package algorithm.Units;
+package alternative_bots_1.Units;
 
-import algorithm.Unit;
+import alternative_bots_1.Unit;
 import battlecode.common.GameActionException;
 import battlecode.common.MapInfo;
 import battlecode.common.MapLocation;
