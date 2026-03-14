@@ -8,25 +8,17 @@ import battlecode.common.Message;
 import battlecode.common.RobotInfo;
 import battlecode.common.UnitType;
 
-
-
-
-
-
-
-
-
 public class Unit extends BaseRobot {
 
     public static MapLocation spawnLocation;
-    // Arah eksplorasi yang disimpan antar giliran
     public static Direction currentExploreDirection = null;
-    // Tag bit untuk menandai pesan broadcast kita agar tidak bentrok dengan pesan lain.
-    private static final int COMM_TAG = 0x80000000;
-    // Mask 10 bit untuk koordinat (0-1023).
+    // Untuk informasi musuh
+    private static final int COMM_ENEMY_ROBOT_TAG = 0x80000000;
+    private static final int COMM_DEADEND_TAG     = 0x40000000; 
+    private static final int COMM_ENEMY_TOWER_TAG = 0x20000000; 
     private static final int COORD_MASK = 0x3FF;
-    // Mask 11 bit untuk ronde (0-2047).
     private static final int ROUND_MASK = 0x7FF;
+    private static Direction bugDirection = null; // Menyusuri tembok
 
     public static void initUnit() {
         if(spawnLocation == null){
@@ -34,30 +26,49 @@ public class Unit extends BaseRobot {
         }
     }
 
-    public static void move(MapLocation target) throws GameActionException{
+    public static void move(MapLocation target) throws GameActionException {
         if(!rc.isMovementReady()){
             return;
         }
 
         MapLocation myLoc = rc.getLocation();
-        Direction bestDir = null;
-        int minDistance = myLoc.distanceSquaredTo(target);
-         for(Direction dir : directions) {
-            if (rc.canMove(dir)){
-                MapLocation nextLoc = myLoc.add(dir);
-                int dist = nextLoc.distanceSquaredTo(target);
 
-                if(dist < minDistance){
-                    minDistance = dist;
-                    bestDir = dir;
-                }
-            }
-         }
+        // Meminta informasi terkait jalur tembok
+        MapLocation deadEnd = getDeadEndBroadcast();
+        if (deadEnd != null && myLoc.distanceSquaredTo(deadEnd) < 30) { // Jika berada di arah area buntu
+            target = myLoc.add(myLoc.directionTo(deadEnd).opposite());
+        }
 
-         if( bestDir != null){
+        Direction bestDir = myLoc.directionTo(target);
+        if (bestDir == Direction.CENTER) return;
+
+        // bergerak
+        if (rc.canMove(bestDir)) {
             rc.move(bestDir);
-         }
+            bugDirection = bestDir; 
+            return;
+        }
 
+        // Mengikuti jalur tembok
+        if (bugDirection == null) bugDirection = bestDir;
+
+        Direction checkDir = bugDirection;
+        boolean moved = false;
+
+        for (int i = 0; i < 8; i++) {
+            if (rc.canMove(checkDir)) {
+                rc.move(checkDir);
+                bugDirection = checkDir.rotateLeft().rotateLeft(); 
+                moved = true;
+                break;
+            }
+            checkDir = checkDir.rotateRight();
+        }
+
+        // Mmeberitahukan bot lainnya
+        if (!moved) {
+            broadcastDeadEnd(myLoc); 
+        }
     }
 
     public static void buildTower() throws GameActionException {
@@ -78,24 +89,20 @@ public class Unit extends BaseRobot {
             for(UnitType tower : towersToBuild){
                 if (rc.canCompleteTowerPattern(tower, buildLoc)){
                     rc.completeTowerPattern(tower, buildLoc);
-                    System.out.println("Tower built at " + buildLoc);
                     return;
                 }
             }
             
             // memberikan mark pada ruin yang ingin dibuat
             if (tile.hasRuin() && !rc.canSenseRobotAtLocation(buildLoc)){
-            for(UnitType tower : towersToBuild){
-                if(rc.canMarkTowerPattern(tower, buildLoc)){
-                    rc.markTowerPattern(tower, buildLoc);
-                    System.out.println("Tower built at " + buildLoc);
-                    return;
+                for(UnitType tower : towersToBuild){
+                    if(rc.canMarkTowerPattern(tower, buildLoc)){
+                        rc.markTowerPattern(tower, buildLoc);
+                        return;
+                    }
                 }
             }
         }
-        }
-
-        
     }
 
     public static boolean refillPaint() throws GameActionException {
@@ -148,76 +155,176 @@ public class Unit extends BaseRobot {
 
 
 
-    // Broadcast lokasi musuh ke ally terdekat.
+    // Broadcast Terkait Musuh
     public static void broadcastEnemyTarget(MapLocation loc) throws GameActionException {
-        int msg = COMM_TAG
+        int msg = COMM_ENEMY_ROBOT_TAG | ((rc.getRoundNum() & ROUND_MASK) << 20) | ((loc.x & COORD_MASK) << 10) | (loc.y & COORD_MASK);
+        sendToAllies(msg);
+    }
+
+    // Broadcast Terkait Tower Musuh
+    public static void broadcastEnemyTower(MapLocation loc) throws GameActionException {
+        int msg = COMM_ENEMY_TOWER_TAG | ((rc.getRoundNum() & ROUND_MASK) << 20) | ((loc.x & COORD_MASK) << 10) | (loc.y & COORD_MASK);
+        sendToAllies(msg);
+    }
+
+    // Mengirim pesan
+    private static void sendToAllies(int msg) throws GameActionException {
+        RobotInfo[] allies = rc.senseNearbyRobots(-1, rc.getTeam());
+        for (RobotInfo ally : allies) {
+            if (rc.canSendMessage(ally.getLocation(), msg)) {
+                rc.sendMessage(ally.getLocation(), msg);
+            }
+        }
+    }
+
+    // Mendapatkan Informasi Teman (Tower > Robot > Jalan Buntu)
+    public static MapLocation getBroadcastTarget() throws GameActionException {
+        Message[] messages = rc.readMessages(-1);
+        if (messages.length == 0) return null;
+
+        MapLocation bestTowerLoc = null;
+        MapLocation bestRobotLoc = null;
+        int current = rc.getRoundNum() & ROUND_MASK;
+        int bestTowerRound = -1;
+        int bestRobotRound = -1;
+        
+        MapLocation myLoc = rc.getLocation();
+
+        for (Message m : messages) {
+            int msg = m.getBytes();
+            int roundSent = (msg >> 20) & ROUND_MASK;
+            int age = (current - roundSent) & ROUND_MASK;
+            int x = (msg >> 10) & COORD_MASK;
+            int y = msg & COORD_MASK;
+            
+            MapLocation targetLoc = new MapLocation(x, y);
+
+            // Filter Jarak Maksimal
+            if (myLoc.distanceSquaredTo(targetLoc) > 400) {
+                continue; 
+            }
+
+            if ((msg & COMM_ENEMY_TOWER_TAG) != 0 && age < 30) {
+                if (roundSent > bestTowerRound) {
+                    bestTowerRound = roundSent;
+                    bestTowerLoc = targetLoc;
+                }
+            } 
+            else if ((msg & COMM_ENEMY_ROBOT_TAG) != 0 && age < 10) {
+                if (roundSent > bestRobotRound) {
+                    bestRobotRound = roundSent;
+                    bestRobotLoc = targetLoc;
+                }
+            }
+        }
+
+        // Filter Jalan Buntu
+        MapLocation deadEnd = getDeadEndBroadcast();
+        if (deadEnd != null) {
+            if (myLoc.distanceSquaredTo(deadEnd) <= 30) {
+                return null; 
+            }
+            if (bestTowerLoc != null && bestTowerLoc.distanceSquaredTo(deadEnd) <= 16) {
+                bestTowerLoc = null;
+            }
+            if (bestRobotLoc != null && bestRobotLoc.distanceSquaredTo(deadEnd) <= 16) {
+                bestRobotLoc = null;
+            }
+        }
+
+        if (bestTowerLoc != null) return bestTowerLoc;
+        return bestRobotLoc; 
+    }
+    
+    // Broadcast Jalan Buntu
+    public static void broadcastDeadEnd(MapLocation loc) throws GameActionException {
+        int msg = COMM_DEADEND_TAG
             | ((rc.getRoundNum() & ROUND_MASK) << 20)
             | ((loc.x & COORD_MASK) << 10)
             | (loc.y & COORD_MASK);
 
         RobotInfo[] allies = rc.senseNearbyRobots(-1, rc.getTeam());
         for (RobotInfo ally : allies) {
-            MapLocation allyLoc = ally.getLocation();
-            if (rc.canSendMessage(allyLoc, msg)) {
-                rc.sendMessage(allyLoc, msg);
+            if (rc.canSendMessage(ally.getLocation(), msg)) {
+                rc.sendMessage(ally.getLocation(), msg);
             }
         }
     }
 
-    // Membaca broadcast terbaru.
-    public static MapLocation getBroadcastTarget() throws GameActionException {
+    public static MapLocation getDeadEndBroadcast() throws GameActionException {
         Message[] messages = rc.readMessages(-1);
-        if (messages.length == 0) {
-            return null;
-        }
-
-        int bestRound = -1;
-        MapLocation bestLoc = null;
-        int current = rc.getRoundNum() & ROUND_MASK;
-
         for (Message m : messages) {
             int msg = m.getBytes();
-            if ((msg & COMM_TAG) == 0) {
-                continue;
+            if ((msg & COMM_DEADEND_TAG) != 0) {
+                int roundSent = (msg >> 20) & ROUND_MASK;
+                int age = (rc.getRoundNum() - roundSent) & ROUND_MASK;
+                
+                // Pesan jalan buntu dihiraukan jika sudah lebih dari 20 iterasi
+                if (age < 20) { 
+                    int x = (msg >> 10) & COORD_MASK;
+                    int y = msg & COORD_MASK;
+                    return new MapLocation(x, y);
+                }
             }
+        }
+        return null;
+    }
 
-            int roundSent = (msg >> 20) & ROUND_MASK;
-            int age = (current - roundSent) & ROUND_MASK;
-            if (age < 10) {
-                int x = (msg >> 10) & COORD_MASK;
-                int y = msg & COORD_MASK;
-                if (roundSent > bestRound) {
-                    bestRound = roundSent;
-                    bestLoc = new MapLocation(x, y);
+    // 
+    public static void wander() throws GameActionException {
+        if (!rc.isMovementReady()) return;
+        if (currentExploreDirection != null && rc.canMove(currentExploreDirection)) {
+            if (Math.random() > 0.2) {
+                rc.move(currentExploreDirection);
+                return;
+            }
+        }
+
+        MapInfo[] visibleTiles = rc.senseNearbyMapInfos(-1);
+        int[] paintDensity = new int[8];
+
+        for (MapInfo tile : visibleTiles) {
+            if (tile.getPaint().isAlly()) {
+                Direction dir = rc.getLocation().directionTo(tile.getMapLocation());
+                if (dir != Direction.CENTER) {
+                    paintDensity[dir.ordinal()]++;
                 }
             }
         }
 
-        return bestLoc; // Mengembalikan null jika tidak ada sinyal darurat
-    }
-    
-    public static void wander() throws GameActionException {
-        if (!rc.isMovementReady()) return;
+        Direction bestExploreDir = null;
+        int minPaint = Integer.MAX_VALUE;
 
-        if (currentExploreDirection == null || !rc.canMove(currentExploreDirection)) {
-            int randomIndex = (int) (Math.random() * directions.length);
-            currentExploreDirection = directions[randomIndex];
+        for (Direction dir : directions) {
+            if (rc.canMove(dir)) {
+                if (paintDensity[dir.ordinal()] < minPaint) {
+                    minPaint = paintDensity[dir.ordinal()];
+                    bestExploreDir = dir;
+                }
+            }
         }
 
-        if (rc.canMove(currentExploreDirection)) {
-            rc.move(currentExploreDirection);
+        if (bestExploreDir != null) {
+            rc.move(bestExploreDir);
+            currentExploreDirection = bestExploreDir;
         } else {
-            currentExploreDirection = currentExploreDirection.rotateRight();
+            if (currentExploreDirection == null) {
+                currentExploreDirection = directions[(int) (Math.random() * directions.length)];
+            }
+            int randomTurn = (Math.random() < 0.5) ? 3 : 5;
+            for(int i = 0; i < randomTurn; i++){
+                currentExploreDirection = currentExploreDirection.rotateRight();
+            }
         }
     }
-public static boolean tryBuildTower() throws GameActionException {
+    // Membuat Tower
+    public static boolean tryBuildTower() throws GameActionException {
         MapLocation myLoc = rc.getLocation();
 
         MapInfo[] nearbyTiles = rc.senseNearbyMapInfos(-1);
         MapLocation targetRuin = null;
         int minDistance = Integer.MAX_VALUE;
 
-        // Cari ruin terdekat
         for (MapInfo tile : nearbyTiles) {
             if (!tile.hasRuin()) continue;
             MapLocation ruinLoc = tile.getMapLocation();
@@ -245,10 +352,19 @@ public static boolean tryBuildTower() throws GameActionException {
         int paint = rc.getPaint();
         UnitType towerToBuild;
 
-        // Prioritas tower
-        if (totalTowers < 3) {
+        // Analisis Garis Depan 
+        RobotInfo[] enemiesNearRuin = rc.senseNearbyRobots(targetRuin, 16, rc.getTeam().opponent());
+        boolean isFrontline = enemiesNearRuin.length > 0;
+
+        // Prioritas Pembuatan Tower
+        if (isFrontline && chips >= 2500) {
+            // Jika ini garis depan dan uang cukup, membuat buat Defense Tower
+            towerToBuild = UnitType.LEVEL_ONE_DEFENSE_TOWER;
+        } 
+        else if (totalTowers < 3) {
             towerToBuild = UnitType.LEVEL_ONE_MONEY_TOWER;
-        } else if (totalTowers < 5) {
+        } 
+        else if (totalTowers < 5) {
             towerToBuild = UnitType.LEVEL_ONE_PAINT_TOWER;
         } 
         else if(totalTowers < 7){
@@ -258,23 +374,19 @@ public static boolean tryBuildTower() throws GameActionException {
             towerToBuild = UnitType.LEVEL_ONE_PAINT_TOWER;
         }
         else {
-            if (totalTowers > 14) {
+            if (chips >= 2500 && paint >= 1000) {
                 towerToBuild = UnitType.LEVEL_ONE_DEFENSE_TOWER;
-            } else if (paint > 1000 && chips < 1000) {
+            } else if (paint > 1500 && chips < 1000) {
                 towerToBuild = UnitType.LEVEL_ONE_MONEY_TOWER;
             } else if (chips > 1500 && paint < 1000) {
                 towerToBuild = UnitType.LEVEL_ONE_PAINT_TOWER;
             }
             else {
-                towerToBuild = UnitType.LEVEL_ONE_MONEY_TOWER;
+                towerToBuild = (totalTowers % 2 == 0) ? UnitType.LEVEL_ONE_MONEY_TOWER : UnitType.LEVEL_ONE_PAINT_TOWER;
             }
         }
-        int requiredChips;
-        if (towerToBuild == UnitType.LEVEL_ONE_DEFENSE_TOWER) {
-            requiredChips = 2500;
-        } else {
-            requiredChips = 1000;
-        }
+
+        int requiredChips = (towerToBuild == UnitType.LEVEL_ONE_DEFENSE_TOWER) ? 2500 : 1000;
         
         if (chips < requiredChips) {
             if (myLoc.distanceSquaredTo(targetRuin) <= 2 && chips >= requiredChips - 200) {
@@ -283,6 +395,7 @@ public static boolean tryBuildTower() throws GameActionException {
             return false; 
         }
 
+        //  Eksekusi
         if (rc.canCompleteTowerPattern(towerToBuild, targetRuin)) {
             rc.completeTowerPattern(towerToBuild, targetRuin);
             return true; 
@@ -292,7 +405,6 @@ public static boolean tryBuildTower() throws GameActionException {
             rc.markTowerPattern(towerToBuild, targetRuin);
         }
 
-        // Bergerak ke ruin
         if (myLoc.distanceSquaredTo(targetRuin) > 2) {
             if (rc.isMovementReady()) {
                 move(targetRuin);
@@ -303,5 +415,3 @@ public static boolean tryBuildTower() throws GameActionException {
         return false; 
     }
 }
-
-
