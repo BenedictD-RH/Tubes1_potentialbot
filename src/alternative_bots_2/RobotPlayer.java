@@ -25,7 +25,7 @@ public class RobotPlayer {
                     case SPLASHER:
                         Splasher.run();
                         break;
-                    // Semua tipe tower diarahkan ke Tower.run()
+                    
                     case LEVEL_ONE_PAINT_TOWER:
                     case LEVEL_ONE_MONEY_TOWER:
                     case LEVEL_ONE_DEFENSE_TOWER:
