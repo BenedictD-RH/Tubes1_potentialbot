@@ -486,7 +486,7 @@ public class Soldier extends Unit {
         }
     }
 
-    // Fungsi pencarian ruin terdekat (A*)
+    // Fungsi pencarian ruin terdekat 
     private static MapLocation findNearbyEmptyRuin() throws GameActionException {
         MapInfo[] tiles = rc.senseNearbyMapInfos(-1);
         MapLocation myLoc = rc.getLocation();
