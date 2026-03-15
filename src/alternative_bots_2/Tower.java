@@ -7,41 +7,45 @@ import battlecode.common.Message;
 import battlecode.common.RobotInfo;
 import battlecode.common.UnitType;
 
-
 public class Tower extends BaseRobot {
 
-    private static int turnCount       = 0;
-    private static int soldierSpawned  = 0;
-    private static int mopperSpawned   = 0;
-    private static int splasherSpawned = 0;
+    private static int spawnCount = 0;
+    private static MapLocation lastEnemyLoc = null;
+    private static int lastEnemyRound = -1;
 
-    private static MapLocation lastEnemyLoc   = null;
-    private static int         lastEnemyRound = -1;
-    private static MapLocation pendingRuin    = null;
+    // Chip saving
+    private static boolean waitingForChips = false;
+    private static int waitingStartRound = 0;
+    private static final int WAIT_TIMEOUT = 40;
+    private static final int UPGRADE_CHIPS_THRESHOLD = 3000;
 
-    // Fungsi menjalankan logic tower setiap giliran
     public static void run() throws GameActionException {
-        turnCount++;
-
-        int round  = rc.getRoundNum();
-        int chips  = rc.getMoney();
-        int paint  = rc.getPaint();
+        int round = rc.getRoundNum();
+        int chips = rc.getMoney();
         int towers = rc.getNumberTowers();
-
-        attackEnemies();
 
         processIncomingMessages();
 
-        // Upgrade tower jika kondisi memungkinkan
-        if (rc.isActionReady() && shouldUpgrade(chips, towers)) {
+        // Upgrade SEBELUM attack agar action cooldown belum habis
+        if (rc.isActionReady() && chips >= UPGRADE_CHIPS_THRESHOLD) {
             if (rc.canUpgradeTower(rc.getLocation())) {
                 rc.upgradeTower(rc.getLocation());
-                return;
             }
         }
 
         if (rc.isActionReady()) {
-            spawnUnit(round, towers, chips, paint);
+            attackEnemies();
+        }
+
+        // Chip saving: keluar jika timeout atau cukup chips
+        if (waitingForChips) {
+            if (round - waitingStartRound >= WAIT_TIMEOUT || chips >= 1000) {
+                waitingForChips = false;
+            }
+        }
+
+        if (rc.isActionReady() && !waitingForChips) {
+            spawnUnit(round, towers, chips);
         }
 
         // Broadcast lokasi tower secara berkala
@@ -50,28 +54,38 @@ public class Tower extends BaseRobot {
         }
     }
 
-    // Fungsi menyerang musuh terdekat dengan prioritas unit non-tower
+    // Attack: kill-focus HP terendah, tie-break unit type priority
     private static void attackEnemies() throws GameActionException {
         if (!rc.isActionReady()) return;
-
         RobotInfo[] enemies = rc.senseNearbyRobots(-1, rc.getTeam().opponent());
         if (enemies.length == 0) return;
 
-        RobotInfo target = null;
-        int minHP = Integer.MAX_VALUE;
+        // Estimasi attack power berdasarkan tipe tower
+        int atkPower = isDefenseTower(rc.getType()) ? 150 : 100;
 
-        // Prioritas utama: musuh bukan tower dengan HP paling rendah
+        // Cek apakah semua musuh bisa one-shot
+        boolean allOneShot = true;
         for (RobotInfo e : enemies) {
-            if (!isTowerType(e.getType()) && e.health < minHP) {
-                minHP = e.health;
-                target = e;
-            }
+            if (!rc.canAttack(e.getLocation())) continue;
+            if (e.health >= atkPower) { allOneShot = false; break; }
         }
 
-        // Fallback ke tower musuh jika tidak ada unit lain
-        if (target == null) {
-            for (RobotInfo e : enemies) {
-                if (e.health < minHP) { minHP = e.health; target = e; }
+        RobotInfo target = null;
+        int bestVal = allOneShot ? Integer.MIN_VALUE : Integer.MAX_VALUE;
+
+        for (RobotInfo e : enemies) {
+            if (!rc.canAttack(e.getLocation())) continue;
+            int hp = e.health;
+            int typePriority = getTypePriority(e.getType());
+
+            if (allOneShot) {
+                // Cegah overkill: pilih HP TERTINGGI (paling bernilai)
+                int val = hp * 10 + typePriority;
+                if (val > bestVal) { bestVal = val; target = e; }
+            } else {
+                // Kill-focus: HP TERENDAH (selesaikan target)
+                int val = hp * 10 - typePriority;
+                if (val < bestVal) { bestVal = val; target = e; }
             }
         }
 
@@ -80,27 +94,34 @@ public class Tower extends BaseRobot {
         }
     }
 
-    // Fungsi memproses pesan masuk dari unit ally
+    private static int getTypePriority(UnitType type) {
+        if (type == UnitType.SOLDIER) return 3;
+        if (type == UnitType.MOPPER) return 2;
+        if (type == UnitType.SPLASHER) return 1;
+        return 0;
+    }
+
     private static void processIncomingMessages() throws GameActionException {
         Message[] msgs = rc.readMessages(-1);
-        int curRound   = rc.getRoundNum();
-
+        int curRound = rc.getRoundNum();
         for (Message m : msgs) {
-            int raw  = m.getBytes();
+            int raw = m.getBytes();
             int type = decodeType(raw);
-            int x    = decodeX(raw);
-            int y    = decodeY(raw);
-
+            int x = decodeX(raw);
+            int y = decodeY(raw);
             switch (type) {
                 case MSG_ENEMY_LOC:
                 case MSG_ENEMY_TOWER:
-                    lastEnemyLoc   = new MapLocation(x, y);
+                    lastEnemyLoc = new MapLocation(x, y);
                     lastEnemyRound = curRound;
-                    relayToNearbyTowers(raw); // teruskan ke tower lain
+                    relayToNearbyTowers(raw);
+                    break;
+                case MSG_RUIN_READY:
+                    waitingForChips = true;
+                    waitingStartRound = curRound;
                     break;
                 case MSG_MOPPER_REQ:
                 case MSG_RUIN_LOC:
-                    pendingRuin = new MapLocation(x, y);
                     break;
                 default:
                     break;
@@ -108,7 +129,6 @@ public class Tower extends BaseRobot {
         }
     }
 
-    // Fungsi meneruskan pesan ke tower ally terdekat
     private static void relayToNearbyTowers(int msg) throws GameActionException {
         RobotInfo[] allies = rc.senseNearbyRobots(-1, rc.getTeam());
         for (RobotInfo a : allies) {
@@ -121,26 +141,22 @@ public class Tower extends BaseRobot {
         }
     }
 
-    // Fungsi broadcast lokasi tower ini ke unit ally terdekat
     private static void broadcastMyLocation() throws GameActionException {
         MapLocation myLoc = rc.getLocation();
         int msg = encodeMessage(MSG_TOWER_LOC, myLoc.x, myLoc.y, rc.getRoundNum() % EXTRA_MASK);
-
         RobotInfo[] nearby = rc.senseNearbyRobots(-1, rc.getTeam());
         int sent = 0;
         for (RobotInfo u : nearby) {
             if (!isTowerType(u.getType()) && rc.canSendMessage(u.getLocation(), msg)) {
                 rc.sendMessage(u.getLocation(), msg);
-                if (++sent >= 3) break; // cukup 3 unit
+                if (++sent >= 3) break;
             }
         }
     }
 
-    // Fungsi spawn unit baru berdasarkan kondisi resources
-    private static void spawnUnit(int round, int towers, int chips, int paint)
-            throws GameActionException {
-
-        UnitType toSpawn = decideUnitType(round, towers, chips, paint);
+    // Spawn strategy: 3 soldier dulu, lalu cycle S→M→SP
+    private static void spawnUnit(int round, int towers, int chips) throws GameActionException {
+        UnitType toSpawn = decideUnitType(chips);
         if (toSpawn == null) return;
 
         MapLocation spawnLoc = chooseBestSpawnLoc(toSpawn);
@@ -148,121 +164,72 @@ public class Tower extends BaseRobot {
 
         if (rc.canBuildRobot(toSpawn, spawnLoc)) {
             rc.buildRobot(toSpawn, spawnLoc);
-            countSpawn(toSpawn);
+            spawnCount++;
+            postSpawnCommunication(spawnLoc);
         }
     }
 
-    // Fungsi memilih tipe unit berdasarkan chips, paint, dan fase permainan
-    // Early game: rush 5 soldier untuk build tower secepat mungkin
-    // Mid/late: adaptif berdasarkan sumber daya yang tersedia
-    private static UnitType decideUnitType(int round, int towers, int chips, int paint) {
-
+    private static UnitType decideUnitType(int chips) {
+        int paint = rc.getPaint();
+        boolean canSoldier = (chips >= 250 && paint >= 200);
+        boolean canMopper = (chips >= 300 && paint >= 100);
         boolean canSplasher = (chips >= 400 && paint >= 300);
-        boolean canSoldier  = (chips >= 250 && paint >= 200);
-        boolean canMopper   = (chips >= 300 && paint >= 100);
 
-        // Early game: rush soldier dulu
-        if (round < EARLY_GAME_END) {
-            if (!canSoldier && !canMopper) return null;
-            if (soldierSpawned < 5 && canSoldier)  return UnitType.SOLDIER;
-            if (mopperSpawned < soldierSpawned / 4 && canMopper) return UnitType.MOPPER;
-            if (canSoldier) return UnitType.SOLDIER;
-            return null;
+        // 3 soldier pertama per tower
+        if (spawnCount < 3) {
+            return canSoldier ? UnitType.SOLDIER : null;
         }
 
-        int total = soldierSpawned + mopperSpawned + splasherSpawned;
-        if (total == 0) return canSoldier ? UnitType.SOLDIER : null;
-
-        double soldierR  = (double) soldierSpawned  / total;
-        double mopperR   = (double) mopperSpawned   / total;
-        double splasherR = (double) splasherSpawned / total;
-
-        // Prioritas khusus: ada ruin yang butuh mopper untuk bersihkan paint musuh
-        if (pendingRuin != null && canMopper) {
-            pendingRuin = null;
-            return UnitType.MOPPER;
+        // Setelah 3: cycle SOLDIER → MOPPER → SPLASHER
+        int cycleIdx = (spawnCount - 3) % 3;
+        switch (cycleIdx) {
+            case 0: return canSoldier ? UnitType.SOLDIER : null;
+            case 1: return canMopper ? UnitType.MOPPER : null;
+            case 2: return canSplasher ? UnitType.SPLASHER : null;
+            default: return canSoldier ? UnitType.SOLDIER : null;
         }
-
-        // Chips kaya + paint kaya: dominasi splasher untuk area control
-        if (chips > 1200 && paint > 300) {
-            if (splasherR < 0.45 && canSplasher) return UnitType.SPLASHER;
-            if (soldierR  < 0.35 && canSoldier)  return UnitType.SOLDIER;
-            if (mopperR   < 0.20 && canMopper)   return UnitType.MOPPER;
-        }
-
-        // Chips kaya + paint rendah: mopper hemat paint atau soldier
-        if (chips > 1000 && paint <= 300) {
-            if (mopperR  < 0.35 && canMopper)  return UnitType.MOPPER;
-            if (soldierR < 0.50 && canSoldier) return UnitType.SOLDIER;
-        }
-
-        // Paint kaya + chips rendah: soldier untuk cat tile
-        if (chips <= 1000 && paint > 250) {
-            if (soldierR  < 0.55 && canSoldier)  return UnitType.SOLDIER;
-            if (splasherR < 0.25 && canSplasher) return UnitType.SPLASHER;
-        }
-
-        // Default: rasio ideal berdasarkan unit yang tersedia
-        if (soldierR  < 0.40 && canSoldier)  return UnitType.SOLDIER;
-        if (splasherR < 0.35 && canSplasher) return UnitType.SPLASHER;
-        if (mopperR   < 0.25 && canMopper)   return UnitType.MOPPER;
-
-        // Fallback ke yang paling terjangkau
-        if (canSoldier) return UnitType.SOLDIER;
-        if (canMopper)  return UnitType.MOPPER;
-        return null;
     }
 
-    // Fungsi memilih lokasi spawn terbaik berdasarkan kondisi peta
+    // Spawn location: paling dekat ke CENTER peta
     private static MapLocation chooseBestSpawnLoc(UnitType type) throws GameActionException {
-        MapLocation myLoc  = rc.getLocation();
-        MapLocation best   = null;
-        int bestScore = Integer.MIN_VALUE;
+        MapLocation myLoc = rc.getLocation();
+        MapLocation center = new MapLocation(rc.getMapWidth() / 2, rc.getMapHeight() / 2);
+        MapLocation best = null;
+        int minDist = Integer.MAX_VALUE;
 
         for (Direction dir : directions) {
             MapLocation spawnLoc = myLoc.add(dir);
             if (!rc.canBuildRobot(type, spawnLoc)) continue;
-
-            int score = 0;
-
-            if (rc.canSenseLocation(spawnLoc)) {
-                // Spawn di tile ally lebih aman
-                if (rc.senseMapInfo(spawnLoc).getPaint().isAlly()) {
-                    score += 20;
-                }
-            }
-
-            // Dekatkan spawn ke arah musuh diketahui
-            if (lastEnemyLoc != null && rc.getRoundNum() - lastEnemyRound < 50) {
-                score -= spawnLoc.distanceSquaredTo(lastEnemyLoc) / 10;
-            }
-
-            // Dekatkan spawn ke ruin yang perlu dibantu
-            if (pendingRuin != null) {
-                score -= spawnLoc.distanceSquaredTo(pendingRuin) / 10;
-            }
-
-            if (score > bestScore) {
-                bestScore = score;
+            int dist = spawnLoc.distanceSquaredTo(center);
+            if (dist < minDist) {
+                minDist = dist;
                 best = spawnLoc;
             }
         }
         return best;
     }
 
-    // Fungsi cek apakah tower perlu di-upgrade
-    private static boolean shouldUpgrade(int chips, int towers) {
-        int round = rc.getRoundNum();
-        if (isPaintTower(rc.getType()))   return chips >= 2500 && round > 100;
-        if (isMoneyTower(rc.getType()))   return chips >= 3500 && round > 200;
-        if (isDefenseTower(rc.getType())) return chips >= 2500;
-        return false;
-    }
+    // Post-spawn: kirim MSG_PAINT_TOWER ke unit baru
+    private static void postSpawnCommunication(MapLocation unitLoc) throws GameActionException {
+        // Cari paint tower terdekat
+        MapLocation paintTower = null;
+        int minDist = Integer.MAX_VALUE;
+        RobotInfo[] allies = rc.senseNearbyRobots(-1, rc.getTeam());
+        for (RobotInfo ally : allies) {
+            if (isPaintTower(ally.getType())) {
+                int dist = unitLoc.distanceSquaredTo(ally.getLocation());
+                if (dist < minDist) { minDist = dist; paintTower = ally.getLocation(); }
+            }
+        }
+        // Fallback ke diri sendiri jika kita paint tower
+        if (paintTower == null && isPaintTower(rc.getType())) {
+            paintTower = rc.getLocation();
+        }
 
-    // Fungsi mencatat jumlah unit yang telah di-spawn
-    private static void countSpawn(UnitType type) {
-        if (type == UnitType.SOLDIER)       soldierSpawned++;
-        else if (type == UnitType.MOPPER)   mopperSpawned++;
-        else if (type == UnitType.SPLASHER) splasherSpawned++;
+        if (paintTower != null && rc.canSendMessage(unitLoc,
+                encodeMessage(MSG_PAINT_TOWER, paintTower.x, paintTower.y, 0))) {
+            rc.sendMessage(unitLoc,
+                encodeMessage(MSG_PAINT_TOWER, paintTower.x, paintTower.y, 0));
+        }
     }
 }

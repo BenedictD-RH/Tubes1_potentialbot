@@ -9,511 +9,522 @@ import battlecode.common.PaintType;
 import battlecode.common.RobotInfo;
 import battlecode.common.UnitType;
 
-
 public class Soldier extends Unit {
-   
-    private static final int STATE_EXPLORE     = 0;  
-    private static final int STATE_GOTO_RUIN   = 1;  
-    private static final int STATE_BUILD_TOWER = 2;  
-    private static final int STATE_REFILL      = 3;  
-    private static final int STATE_EXPAND      = 4;  
-    private static final int STATE_COMBAT      = 5;  
+
+    private static final int STATE_EXPLORE      = 0;
+    private static final int STATE_BUILD_RUIN   = 1;
+    private static final int STATE_ATTACK_TOWER = 2;
+    private static final int STATE_BUILD_SRP    = 3;
+    private static final int STATE_EXPAND_SRP   = 4;
+    private static final int STATE_RETREAT      = 5;
 
     private static int state = STATE_EXPLORE;
- 
-    private static MapLocation ruinTarget   = null;  
-    private static MapLocation paintTarget  = null;  
-    private static MapLocation expandTarget = null;
-    private static MapLocation combatTarget = null;
+    private static MapLocation modeTarget = null;
 
-    
-    private static MapLocation lastPos  = null;
-    private static int posCount = 0;
+    // SRP expand
+    private static MapLocation[] srpCheckLocs = null;
+    private static int srpCheckIdx = 0;
 
-    
-    private static boolean patternMarked = false;
+    // Chip saving wait
+    private static int ruinWaitStart = 0;
+    private static final int RUIN_WAIT_MAX = 35;
 
-    
-    private static final int REFILL_WHILE_BUILDING = 40;  
-    private static final int REFILL_WHILE_EXPLORE  = 25;  
+    // Fungsi untuk menjalankan soldier
 
-    // Fungsi menjalankan
     public static void run() throws GameActionException {
         initUnit();
-        scanEnvironment();
         processMessages();
+        scanEnvironment();
+        tryUpgradeNearbyTower();
 
-        detectStuck();
-        selectState();
+        // RETREAT jika paint < 5%
+        int paint = rc.getPaint();
+        int paintMax = rc.getType().paintCapacity;
+        if (paint * 20 < paintMax) {
+            doRetreat();
+            return;
+        }
+        // Keluar retreat jika paint >= 7.5%
+        if (state == STATE_RETREAT && paint * 100 / paintMax >= 8) {
+            state = STATE_EXPLORE;
+        }
+
+        // Scan target penting saat explore / expand
+        if (state == STATE_EXPLORE || state == STATE_EXPAND_SRP) {
+            checkForImportantTargets();
+        }
+
         executeState();
     }
 
-    // Fungsi memilih state
-    private static void selectState() throws GameActionException {
-        int paint    = rc.getPaint();
-        int capacity = rc.getType().paintCapacity;
-        int pct      = (paint * 100) / capacity;
-        int chips    = rc.getMoney();
-        int towers   = rc.getNumberTowers();
-        int refillThreshold = (state == STATE_BUILD_TOWER || state == STATE_GOTO_RUIN)
-                            ? REFILL_WHILE_BUILDING : REFILL_WHILE_EXPLORE;
+    // Fungsi untuk state machine
+    private static void executeState() throws GameActionException {
+        switch (state) {
+            case STATE_BUILD_RUIN:   executeBuildRuin(); break;
+            case STATE_ATTACK_TOWER: executeAttackTower(); break;
+            case STATE_BUILD_SRP:    executeBuildSRP(); break;
+            case STATE_EXPAND_SRP:   executeExpandSRP(); break;
+            case STATE_RETREAT:      doRetreat(); break;
+            default:                 executeExplore(); break;
+        }
+    }
 
-        if (pct <= refillThreshold) {
-            if (state != STATE_REFILL) {
-                returnLocation = ruinTarget;  
+    // Fungsi untuk mengecek target penting
+    private static void checkForImportantTargets() throws GameActionException {
+        RobotInfo[] enemies = rc.senseNearbyRobots(-1, rc.getTeam().opponent());
+
+        // 1. Enemy tower → attack
+        for (RobotInfo e : enemies) {
+            if (isTowerType(e.getType())) {
+                modeTarget = e.getLocation();
+                state = STATE_ATTACK_TOWER;
+                broadcastEnemyTower(e.getLocation());
+                return;
             }
-            state = STATE_REFILL;
+        }
+
+        // 2. Empty ruin → build
+        MapLocation nearRuin = findNearbyEmptyRuin();
+        if (nearRuin != null) {
+            modeTarget = nearRuin;
+            state = STATE_BUILD_RUIN;
+            broadcastRuin(nearRuin);
             return;
         }
-        
-        if (state == STATE_REFILL && pct > 70) {
-            if (returnLocation != null) {
-                ruinTarget    = returnLocation;
-                patternMarked = false;  
-                returnLocation = null;
-                state = STATE_GOTO_RUIN;
-            } else {
-                state = STATE_EXPLORE;
+
+        // 3. SRP candidate
+        MapLocation myLoc = rc.getLocation();
+        MapLocation srpCand = snapToSRPGrid(myLoc);
+        if (srpCand.distanceSquaredTo(myLoc) <= 2 && canStartSRP(srpCand)) {
+            modeTarget = srpCand;
+            state = STATE_BUILD_SRP;
+            return;
+        }
+    }
+
+    // Fungsi untuk eksplorasi
+
+    private static void executeExplore() throws GameActionException {
+        // Paint tile saat explore
+        if (rc.isActionReady()) paintNearbyTile();
+
+        // Cek broadcast ruin
+        MapLocation ruinMsg = readBroadcastTarget(MSG_RUIN_LOC);
+        if (ruinMsg != null) {
+            addKnownRuin(ruinMsg);
+            modeTarget = ruinMsg;
+            state = STATE_BUILD_RUIN;
+        }
+
+        // Cek known ruin dari cache
+        if (state == STATE_EXPLORE) {
+            MapLocation knownRuin = findNearestKnownRuin();
+            if (knownRuin != null && rc.getMoney() >= 700) {
+                modeTarget = knownRuin;
+                state = STATE_BUILD_RUIN;
             }
         }
-        
-        if (state == STATE_BUILD_TOWER || state == STATE_GOTO_RUIN) {
-            
-            if (ruinTarget != null && rc.canSenseLocation(ruinTarget)) {
-                if (isTowerBuiltAt(ruinTarget)) {
-                    removeKnownRuin(ruinTarget);
-                    ruinTarget    = null;
-                    patternMarked = false;
-                    paintTarget   = null;
+
+        if (rc.isMovementReady()) explore();
+
+        // Paint lagi setelah move
+        if (rc.isActionReady()) paintNearbyTile();
+    }
+
+    // Fungsi untuk membangun tower di ruin (manual API)
+    private static void executeBuildRuin() throws GameActionException {
+        if (modeTarget == null) { state = STATE_EXPLORE; return; }
+        MapLocation myLoc = rc.getLocation();
+        MapLocation ruinLoc = modeTarget;
+
+        // 1. Cek tower sudah jadi
+        if (rc.canSenseLocation(ruinLoc)) {
+            if (rc.canSenseRobotAtLocation(ruinLoc)) {
+                RobotInfo r = rc.senseRobotAtLocation(ruinLoc);
+                if (r != null && r.getTeam() == rc.getTeam() && isTowerType(r.getType())) {
+                    removeKnownRuin(ruinLoc);
+                    modeTarget = null;
                     state = STATE_EXPLORE;
                     return;
                 }
             }
-            
+        }
+
+        // 2. Dekati jika belum dalam sensor
+        if (!rc.canSenseLocation(ruinLoc)) {
+            if (rc.isMovementReady()) bugNavigateTo(ruinLoc);
             return;
         }
-        
-        MapLocation nearRuin = findNearbyEmptyRuin();
-        if (nearRuin != null && chips >= chipsRequired(towers)) {
-            ruinTarget    = nearRuin;
-            patternMarked = false;
-            paintTarget   = null;
-            state = STATE_BUILD_TOWER;
-            // Broadcast ruin 
-            broadcastRuin(nearRuin);
+
+        // 3. Claim ruin (mark 1 tile)
+        ensureRuinClaimed(ruinLoc);
+
+        // 4. Tentukan tipe tower
+        UnitType towerType = getNewTowerType();
+
+        // 5. Coba complete langsung
+        if (rc.canCompleteTowerPattern(towerType, ruinLoc)) {
+            rc.completeTowerPattern(towerType, ruinLoc);
+            onTowerBuilt(towerType, ruinLoc);
             return;
         }
-        MapLocation memRuin = findAssignedRuin();
-        if (memRuin != null && chips >= chipsRequired(towers)) {
-            ruinTarget    = memRuin;
-            patternMarked = false;
-            paintTarget   = null;
-            state = STATE_GOTO_RUIN;
-            return;
+
+        // 6. Positioning: orbit di sekitar ruin
+        positionAroundRuin(myLoc, ruinLoc);
+
+        // 7. Paint tiles
+        if (rc.isActionReady() && rc.getPaint() >= 5) {
+            boolean[][] pattern = rc.getTowerPattern(towerType);
+            if (!trySelfPaint(myLoc, ruinLoc, pattern)) {
+                MapLocation enemyRef = resolveEnemyLocation();
+                paintBestPatternTile(ruinLoc, pattern, enemyRef);
+            }
+            // Coba complete lagi
+            if (rc.canCompleteTowerPattern(towerType, ruinLoc)) {
+                rc.completeTowerPattern(towerType, ruinLoc);
+                onTowerBuilt(towerType, ruinLoc);
+                return;
+            }
         }
-        
-        if (towers >= 4 && pct > 50) {
-            RobotInfo[] enemies = rc.senseNearbyRobots(-1, rc.getTeam().opponent());
-            for (RobotInfo e : enemies) {
-                if (isTowerType(e.getType())) {
-                    combatTarget = e.getLocation();
-                    state = STATE_COMBAT;
-                    return;
+
+        // 8. Chip saving jika pattern penuh tapi chip kurang
+        int dist = myLoc.distanceSquaredTo(ruinLoc);
+        if (dist <= 8 && rc.getPaint() >= 5) {
+            boolean[][] pattern = rc.getTowerPattern(towerType);
+            if (isPatternFullyPainted(ruinLoc, pattern)) {
+                broadcastRuinReady(ruinLoc);
+                if (ruinWaitStart == 0) ruinWaitStart = rc.getRoundNum();
+                if (rc.getRoundNum() - ruinWaitStart > RUIN_WAIT_MAX) {
+                    ruinWaitStart = 0;
                 }
             }
         }
-        
-        if (towers >= 3 && pct > 50) {
-            state = STATE_EXPAND;
-            return;
-        }
-        
+    }
+
+    private static void onTowerBuilt(UnitType type, MapLocation loc) {
+        if (isPaintTower(type)) addKnownPaintTower(loc);
+        addKnownAllyTower(loc);
+        removeKnownRuin(loc);
+        modeTarget = null;
+        ruinWaitStart = 0;
         state = STATE_EXPLORE;
     }
 
-    // Fungsi menjalankan state
-    private static void executeState() throws GameActionException {
-        switch (state) {
-            case STATE_BUILD_TOWER: executeBuildTower(); break;
-            case STATE_GOTO_RUIN:   executeGotoRuin();   break;
-            case STATE_REFILL:      executeRefill();     break;
-            case STATE_EXPAND:      executeExpand();     break;
-            case STATE_COMBAT:      executeCombat();     break;
-            default:                executeExplore();    break;
+    private static void ensureRuinClaimed(MapLocation ruinLoc) throws GameActionException {
+        for (Direction d : Direction.values()) {
+            MapLocation adj = ruinLoc.add(d);
+            if (rc.canSenseLocation(adj)) {
+                MapInfo info = rc.senseMapInfo(adj);
+                if (info.getMark() != PaintType.EMPTY) return; // sudah diklaim
+            }
+        }
+        MapLocation northLoc = ruinLoc.add(Direction.NORTH);
+        if (rc.canMark(northLoc)) {
+            rc.mark(northLoc, false);
         }
     }
 
-    // Fungsi menjalankan state BUILD_TOWER
-    private static void executeBuildTower() throws GameActionException {
-        if (ruinTarget == null) { state = STATE_EXPLORE; return; }
-        int towers    = rc.getNumberTowers();
-        UnitType type = chooseTowerType(towers);
-        
-        if (rc.canCompleteTowerPattern(type, ruinTarget)) {
-            rc.completeTowerPattern(type, ruinTarget);
-            if (isPaintTower(type)) addKnownPaintTower(ruinTarget);
-            addKnownAllyTower(ruinTarget);
-            removeKnownRuin(ruinTarget);
-            ruinTarget    = null;
-            patternMarked = false;
-            paintTarget   = null;
-            state = STATE_EXPLORE;
+    private static void positionAroundRuin(MapLocation myLoc, MapLocation ruinLoc) throws GameActionException {
+        if (!rc.isMovementReady()) return;
+        if (myLoc.distanceSquaredTo(ruinLoc) > 2) {
+            bugNavigateTo(ruinLoc);
             return;
         }
-        MapLocation myLoc = rc.getLocation();
-        int distToRuin = myLoc.distanceSquaredTo(ruinTarget);
-        
-        if (!patternMarked && distToRuin <= 2) {
-            if (rc.canMarkTowerPattern(type, ruinTarget)) {
-                rc.markTowerPattern(type, ruinTarget);
-                patternMarked = true;
-            }
-        }
-        
-        if (rc.isActionReady()) {
-            
-            MapLocation tileToGo = findBestPatternTile(ruinTarget);
-
-            if (tileToGo != null) {
-                if (rc.canAttack(tileToGo)) {
-                    
-                    PaintType mark = rc.senseMapInfo(tileToGo).getMark();
-                    boolean useSecondary = (mark == PaintType.ALLY_SECONDARY);
-                    rc.attack(tileToGo, useSecondary);
-                    paintTarget = null;
-                } else {
-                    
-                    paintTarget = tileToGo;
-                }
-            }
-        }
-        
-        if (rc.isMovementReady()) {
-            if (paintTarget != null) {
-                
-                moveSimple(paintTarget);
-                checkStuck();
-            } else if (distToRuin > 2) {
-                
-                moveSimple(ruinTarget);
-                checkStuck();
-            }
-            
+        // Orbit cardinal: pindah ke posisi cardinal berikutnya
+        Direction ruinToMe = ruinLoc.directionTo(myLoc);
+        int cardIdx = ((ruinToMe.ordinal() / 2) + 1) % 4;
+        MapLocation nextSpot = ruinLoc.add(cardinalDirs[cardIdx]);
+        Direction moveDir = myLoc.directionTo(nextSpot);
+        if (moveDir != Direction.CENTER && rc.canMove(moveDir)) {
+            rc.move(moveDir);
         }
     }
 
-    // Fungsi menjalankan state GOTO_RUIN
-    private static void executeGotoRuin() throws GameActionException {
-        if (ruinTarget == null) { state = STATE_EXPLORE; return; }
-        
-        if (rc.canSenseLocation(ruinTarget)) {
-            if (isTowerBuiltAt(ruinTarget)) {
-                removeKnownRuin(ruinTarget);
-                ruinTarget = null;
+    private static boolean trySelfPaint(MapLocation myLoc, MapLocation ruinLoc, boolean[][] pattern)
+            throws GameActionException {
+        int dx = myLoc.x - ruinLoc.x + 2;
+        int dy = myLoc.y - ruinLoc.y + 2;
+        if (dx < 0 || dx > 4 || dy < 0 || dy > 4) return false;
+        boolean wantSec = pattern[dx][dy];
+        PaintType want = wantSec ? PaintType.ALLY_SECONDARY : PaintType.ALLY_PRIMARY;
+        if (!rc.canSenseLocation(myLoc)) return false;
+        PaintType cur = rc.senseMapInfo(myLoc).getPaint();
+        if (cur == want || cur.isEnemy()) return false;
+        if (rc.canAttack(myLoc)) {
+            rc.attack(myLoc, wantSec);
+            return true;
+        }
+        return false;
+    }
+
+    private static void paintBestPatternTile(MapLocation ruinLoc, boolean[][] pattern, MapLocation enemyRef)
+            throws GameActionException {
+        int offset = rand() % 25;
+        MapLocation bestLoc = null;
+        boolean bestSec = false;
+        int bestEnemyDist = Integer.MAX_VALUE;
+
+        for (int i = 24; i >= 0; i--) {
+            int idx = (i + offset) % 25;
+            int dx = idx % 5;
+            int dy = idx / 5;
+            if (dx == 2 && dy == 2) continue; // skip center (ruin)
+            MapLocation tileLoc = ruinLoc.translate(dx - 2, dy - 2);
+            if (!rc.canSenseLocation(tileLoc)) continue;
+            if (!rc.canAttack(tileLoc)) continue;
+            MapInfo info = rc.senseMapInfo(tileLoc);
+            if (!info.isPassable()) continue;
+            if (info.getPaint().isEnemy()) continue; // soldier can't override enemy
+            boolean wantSec = pattern[dx][dy];
+            PaintType want = wantSec ? PaintType.ALLY_SECONDARY : PaintType.ALLY_PRIMARY;
+            if (info.getPaint() == want) continue; // sudah benar
+
+            int d = tileLoc.distanceSquaredTo(enemyRef);
+            if (d < bestEnemyDist) {
+                bestEnemyDist = d;
+                bestLoc = tileLoc;
+                bestSec = wantSec;
+            }
+        }
+        if (bestLoc != null && rc.canAttack(bestLoc)) {
+            rc.attack(bestLoc, bestSec);
+        }
+    }
+
+    private static boolean isPatternFullyPainted(MapLocation ruinLoc, boolean[][] pattern)
+            throws GameActionException {
+        for (int dx = 0; dx < 5; dx++) {
+            for (int dy = 0; dy < 5; dy++) {
+                if (dx == 2 && dy == 2) continue;
+                MapLocation loc = ruinLoc.translate(dx - 2, dy - 2);
+                if (!rc.canSenseLocation(loc)) continue;
+                MapInfo info = rc.senseMapInfo(loc);
+                if (!info.isPassable()) continue;
+                PaintType want = pattern[dx][dy] ? PaintType.ALLY_SECONDARY : PaintType.ALLY_PRIMARY;
+                if (info.getPaint() != want) return false;
+            }
+        }
+        return true;
+    }
+
+    // Fungsi untuk memilih tipe tower
+
+    private static UnitType getNewTowerType() {
+        int n = rc.getNumberTowers();
+        if (n < 4) return UnitType.LEVEL_ONE_MONEY_TOWER;
+        // Cycle: M P P M P P ...
+        int cycle = (n - 4) % 3;
+        if (cycle == 0) return UnitType.LEVEL_ONE_MONEY_TOWER;
+        return UnitType.LEVEL_ONE_PAINT_TOWER;
+    }
+
+    // Fungsi untuk menyerang tower musuh
+
+    private static void executeAttackTower() throws GameActionException {
+        if (modeTarget == null) { state = STATE_EXPLORE; return; }
+        MapLocation myLoc = rc.getLocation();
+        MapLocation tLoc = modeTarget;
+
+        // Cek tower masih ada
+        if (rc.canSenseLocation(tLoc)) {
+            if (!rc.canSenseRobotAtLocation(tLoc)) {
+                modeTarget = null;
                 state = STATE_EXPLORE;
                 return;
             }
-            state = STATE_BUILD_TOWER;
-            return;
-        }
-        
-        if (rc.isMovementReady()) {
-            moveSimple(ruinTarget);
-            checkStuck();
-        }
-    }
-    
-    // Fungsi menjalankan state REFILL
-    private static void executeRefill() throws GameActionException {
-        if (!refillPaint()) {
-            state = STATE_EXPLORE;
-        }
-    }
-    
-    // Fungsi menjalankan state EXPAND
-    private static void executeExpand() throws GameActionException {
-        MapLocation nearRuin = findNearbyEmptyRuin();
-        if (nearRuin != null && rc.getMoney() >= chipsRequired(rc.getNumberTowers())) {
-            ruinTarget    = nearRuin;
-            patternMarked = false;
-            paintTarget   = null;
-            state = STATE_BUILD_TOWER;
-            return;
-        }
-        // Untuk 20% bots, membuat SRP baru
-        if (rc.getID() % 5 == 0 && rc.getPaint() > 100) {
-            RobotInfo[] enemies = rc.senseNearbyRobots(-1, rc.getTeam().opponent());
-            if (enemies.length == 0) {
-                MapInfo[] nearTiles = rc.senseNearbyMapInfos(-1);
-                for (MapInfo t : nearTiles) {
-                    if (rc.canCompleteResourcePattern(t.getMapLocation())) {
-                        rc.completeResourcePattern(t.getMapLocation());
-                        return;
-                    }
-                }
-                MapLocation myLoc = rc.getLocation();
-                if (rc.canMarkResourcePattern(myLoc)) {
-                    rc.markResourcePattern(myLoc);
-                }
-                if (rc.isActionReady()) {
-                    for (MapInfo t : nearTiles) {
-                        PaintType mark  = t.getMark();
-                        PaintType paint = t.getPaint();
-                        if (mark != PaintType.EMPTY && mark != paint && t.isPassable()) {
-                            boolean sec = (mark == PaintType.ALLY_SECONDARY);
-                            if (rc.canAttack(t.getMapLocation())) {
-                                rc.attack(t.getMapLocation(), sec);
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        // Paint tile terbaik dalam jangkauan attack 
-        if (rc.isActionReady()) {
-            MapLocation best = findBestExpandPaintTarget();
-            if (best != null) {
-                if (rc.canAttack(best)) {
-                    PaintType mark = rc.senseMapInfo(best).getMark();
-                    boolean useSecondary = (mark == PaintType.ALLY_SECONDARY);
-                    rc.attack(best, useSecondary);
-                    return;
-                } else {
-                    expandTarget = best;
-                }
-            }
-        }
-        // bots bergerak
-        if (rc.isMovementReady()) {
-            if (expandTarget != null) {
-                moveSimple(expandTarget);
-                if (rc.getLocation().distanceSquaredTo(expandTarget) <= 1) expandTarget = null;
-            } else {
-                explore();
-            }
-        }
-    }
-
-    // Fungsi menjalankan state COMBAT
-    private static void executeCombat() throws GameActionException {
-        if (combatTarget == null) { state = STATE_EXPLORE; return; }
-
-        if (rc.canSenseLocation(combatTarget) && !rc.canSenseRobotAtLocation(combatTarget)) {
-            combatTarget = null;
-            state = STATE_EXPLORE;
-            return;
-        }
-
-        MapLocation myLoc = rc.getLocation();
-        int dist = myLoc.distanceSquaredTo(combatTarget);
-
-        if (dist <= 3 && rc.isActionReady() && rc.canAttack(combatTarget)) {
-            rc.attack(combatTarget);
-            if (rc.isMovementReady()) {
-                Direction away = combatTarget.directionTo(myLoc);
-                if (away != null && rc.canMove(away)) rc.move(away);
-            }
-            return;
-        }
-        if (rc.isMovementReady()) moveSimple(combatTarget);
-    }
-
-    // Fungsi menjalankan state EXPLORE
-    private static void executeExplore() throws GameActionException {
-        
-        RobotInfo[] enemies = rc.senseNearbyRobots(-1, rc.getTeam().opponent());
-        if (enemies.length > 0) broadcastEnemyLocation(enemies[0].getLocation());
-
-        if (rc.isMovementReady()) {
-            
-            MapLocation ruinMsg = readBroadcastTarget(MSG_RUIN_LOC);
-            if (ruinMsg != null) {
-                addKnownRuin(ruinMsg);
-                ruinTarget    = ruinMsg;
-                patternMarked = false;
-                state = STATE_GOTO_RUIN;
-                moveSimple(ruinMsg);
+            RobotInfo r = rc.senseRobotAtLocation(tLoc);
+            if (r == null || r.getTeam() == rc.getTeam()) {
+                modeTarget = null;
+                state = STATE_EXPLORE;
                 return;
             }
+        }
+
+        int dist = myLoc.distanceSquaredTo(tLoc);
+
+        // Approach jika di luar attack range
+        if (dist > rc.getType().actionRadiusSquared) {
+            if (rc.isMovementReady()) bugNavigateTo(tLoc);
+        }
+
+        // Attack
+        if (rc.isActionReady() && rc.canAttack(tLoc)) {
+            rc.attack(tLoc);
+        }
+
+        // Kite: mundur setelah serang
+        if (rc.isMovementReady() && myLoc.distanceSquaredTo(tLoc) <= 9) {
+            Direction away = tLoc.directionTo(myLoc);
+            if (!tryMove(away)) {
+                if (!tryMove(away.rotateLeft())) {
+                    tryMove(away.rotateRight());
+                }
+            }
+        }
+    }
+
+    // Fungsi untuk membangun SRP
+
+    private static void executeBuildSRP() throws GameActionException {
+        if (modeTarget == null) { state = STATE_EXPLORE; return; }
+        MapLocation srpLoc = modeTarget;
+        MapLocation myLoc = rc.getLocation();
+
+        // Mark center sebagai klaim
+        if (rc.canSenseLocation(srpLoc)) {
+            MapInfo centerInfo = rc.senseMapInfo(srpLoc);
+            if (centerInfo.getMark() == PaintType.EMPTY && rc.canMark(srpLoc)) {
+                rc.mark(srpLoc, true);
+            }
+        }
+
+        boolean[][] pattern = rc.getResourcePattern();
+        boolean noTilePainted = true;
+
+        if (rc.isActionReady() && rc.getPaint() >= 5) {
+            // Self-paint dulu
+            int sdx = myLoc.x - srpLoc.x + 2;
+            int sdy = myLoc.y - srpLoc.y + 2;
+            if (sdx >= 0 && sdx <= 4 && sdy >= 0 && sdy <= 4) {
+                boolean wantSec = pattern[sdx][sdy];
+                PaintType want = wantSec ? PaintType.ALLY_SECONDARY : PaintType.ALLY_PRIMARY;
+                if (rc.canSenseLocation(myLoc)) {
+                    PaintType cur = rc.senseMapInfo(myLoc).getPaint();
+                    if (cur != want && !cur.isEnemy() && rc.canAttack(myLoc)) {
+                        rc.attack(myLoc, wantSec);
+                        noTilePainted = false;
+                    }
+                }
+            }
+
+            // Loop 25 tile, random offset
+            if (rc.isActionReady()) {
+                int offset = rand() % 25;
+                for (int i = 24; i >= 0; i--) {
+                    int idx = (i + offset) % 25;
+                    int dx = idx % 5, dy = idx / 5;
+                    MapLocation tileLoc = srpLoc.translate(dx - 2, dy - 2);
+                    if (!rc.canSenseLocation(tileLoc) || !rc.canAttack(tileLoc)) continue;
+                    MapInfo info = rc.senseMapInfo(tileLoc);
+                    if (!info.isPassable() || info.getPaint().isEnemy()) continue;
+                    boolean wantSec = pattern[dx][dy];
+                    PaintType want = wantSec ? PaintType.ALLY_SECONDARY : PaintType.ALLY_PRIMARY;
+                    if (info.getPaint() == want) { noTilePainted = false; continue; }
+                    rc.attack(tileLoc, wantSec);
+                    noTilePainted = false;
+                    break;
+                }
+            }
+        }
+
+        // Try complete
+        if (rc.canCompleteResourcePattern(srpLoc)) {
+            rc.completeResourcePattern(srpLoc);
+            setupSRPExpand(srpLoc);
+            return;
+        }
+
+        // Move closer jika tidak bisa paint apa-apa
+        if (noTilePainted && rc.isMovementReady()) {
+            bugNavigateTo(srpLoc);
+        }
+    }
+
+    private static void setupSRPExpand(MapLocation srp) {
+        srpCheckLocs = new MapLocation[]{
+            srp.translate(4, 0), srp.translate(-4, 0),
+            srp.translate(0, 4), srp.translate(0, -4),
+            srp.translate(4, 4), srp.translate(4, -4),
+            srp.translate(-4, 4), srp.translate(-4, -4),
+        };
+        srpCheckIdx = 0;
+        state = STATE_EXPAND_SRP;
+        modeTarget = null;
+    }
+
+    private static void executeExpandSRP() throws GameActionException {
+        if (srpCheckLocs == null || srpCheckIdx >= srpCheckLocs.length) {
+            state = STATE_EXPLORE;
+            return;
+        }
+
+        MapLocation candidate = srpCheckLocs[srpCheckIdx];
+        int W = rc.getMapWidth(), H = rc.getMapHeight();
+
+        // Skip jika out of bounds
+        if (candidate.x < 2 || candidate.x >= W - 2 || candidate.y < 2 || candidate.y >= H - 2) {
+            srpCheckIdx++;
+            return;
+        }
+
+        if (rc.canSenseLocation(candidate)) {
+            if (canStartSRP(candidate)) {
+                modeTarget = candidate;
+                state = STATE_BUILD_SRP;
+                return;
+            }
+            srpCheckIdx++;
+            return;
+        }
+        // Belum bisa sense → dekati
+        if (rc.isMovementReady()) bugNavigateTo(candidate);
+
+        // Paint sambil jalan
+        if (rc.isActionReady()) paintNearbyTile();
+    }
+
+    private static void doRetreat() throws GameActionException {
+        state = STATE_RETREAT;
+
+        // Cari paint tower visible
+        MapLocation paintTower = null;
+        int minDist = Integer.MAX_VALUE;
+        RobotInfo[] allies = rc.senseNearbyRobots(-1, rc.getTeam());
+        for (RobotInfo ally : allies) {
+            if (isPaintTower(ally.getType())) {
+                int dist = rc.getLocation().distanceSquaredTo(ally.getLocation());
+                if (dist < minDist) { minDist = dist; paintTower = ally.getLocation(); }
+            }
+        }
+        if (paintTower == null) paintTower = cachedPaintTowerLoc;
+        if (paintTower == null && spawnLocation != null) paintTower = spawnLocation;
+
+        if (paintTower != null) {
+            int dist = rc.getLocation().distanceSquaredTo(paintTower);
+            if (dist <= 2) {
+                // Withdraw paint
+                if (rc.canSenseRobotAtLocation(paintTower)) {
+                    int needed = rc.getType().paintCapacity - rc.getPaint();
+                    if (needed > 0 && rc.canTransferPaint(paintTower, -needed)) {
+                        rc.transferPaint(paintTower, -needed);
+                    }
+                }
+            } else if (rc.isMovementReady()) {
+                bugNavigateTo(paintTower);
+            }
+        } else if (rc.isMovementReady()) {
             explore();
         }
     }
 
-    // Fungsi mencari rute terbaik
-    private static MapLocation findBestPatternTile(MapLocation ruinCenter)
-            throws GameActionException {
-        MapLocation myLoc = rc.getLocation();
-
-        
-        MapInfo[] tiles = rc.senseNearbyMapInfos(ruinCenter, 8);
-        MapLocation best    = null;
-        int         minDist = Integer.MAX_VALUE;
-
-        for (MapInfo tile : tiles) {
-            if (!tile.isPassable()) continue;
-
-            PaintType mark  = tile.getMark();
-            PaintType paint = tile.getPaint();
-
-            
-            if (mark == PaintType.EMPTY) continue;
-            if (mark == paint) continue; 
-
-            MapLocation loc  = tile.getMapLocation();
-            int         dist = myLoc.distanceSquaredTo(loc);
-
-            if (dist < minDist) {
-                minDist = dist;
-                best    = loc;
-            }
-        }
-        return best;
-    }
-
-    // score setiap ruin berdasarkan kondisi yang ada
-    private static MapLocation findAssignedRuin() {
-        if (knownRuinCount == 0) return null;
-
-        MapLocation myLoc = rc.getLocation();
-
-        // Score setiap ruin
-        MapLocation[] top   = new MapLocation[3];
-        int[]         score = {Integer.MIN_VALUE, Integer.MIN_VALUE, Integer.MIN_VALUE};
-
-        for (int i = 0; i < knownRuinCount; i++) {
-            MapLocation ruin = knownRuins[i];
-            int dist = myLoc.distanceSquaredTo(ruin);
-            int s = -dist;
-
-            // nilai dikurangi jika musuh diketahui dekat ruin ini 
-            if (lastKnownEnemyLoc != null && rc.getRoundNum() - lastKnownEnemyRound < 60) {
-                int enemyToRuin = ruin.distanceSquaredTo(lastKnownEnemyLoc);
-                if (enemyToRuin < 100) {
-                    s -= (100 - enemyToRuin) * 4;
-                }
-            }
-
-            // Bonus kecil jika ruin lebih dekat ke ally territory
-            if (spawnLocation != null) {
-                int ruinDistFromSpawn = ruin.distanceSquaredTo(spawnLocation);
-                int myDistFromSpawn   = myLoc.distanceSquaredTo(spawnLocation);
-                if (ruinDistFromSpawn < myDistFromSpawn) {
-                    s += 15;
-                }
-            }
-            if (s > score[0]) {
-                score[2] = score[1]; top[2] = top[1];
-                score[1] = score[0]; top[1] = top[0];
-                score[0] = s;        top[0] = ruin;
-            } else if (s > score[1]) {
-                score[2] = score[1]; top[2] = top[1];
-                score[1] = s;        top[1] = ruin;
-            } else if (s > score[2]) {
-                score[2] = s;        top[2] = ruin;
-            }
-        }
-
-        // Hitung slot terisi
-        int filled = 0;
-        for (int k = 0; k < 3; k++) if (top[k] != null) filled++;
-        if (filled == 0) return null;
-        int idx = rc.getID() % filled;
-        return top[idx] != null ? top[idx] : top[0];
-    }
-
-    // Fungsi untuk mencari terdekat ruin
     private static MapLocation findNearbyEmptyRuin() throws GameActionException {
         MapInfo[] tiles = rc.senseNearbyMapInfos(-1);
         MapLocation myLoc = rc.getLocation();
-        MapLocation best  = null;
+        MapLocation best = null;
         int minDist = Integer.MAX_VALUE;
-
         for (MapInfo tile : tiles) {
             if (!tile.hasRuin()) continue;
             MapLocation loc = tile.getMapLocation();
-            if (isTowerBuiltAt(loc)) {
-                removeKnownRuin(loc);  
-                continue;
+            if (rc.canSenseRobotAtLocation(loc)) {
+                RobotInfo r = rc.senseRobotAtLocation(loc);
+                if (r != null && isTowerType(r.getType())) {
+                    removeKnownRuin(loc);
+                    continue;
+                }
             }
             int dist = myLoc.distanceSquaredTo(loc);
             if (dist < minDist) { minDist = dist; best = loc; }
         }
         return best;
-    }
-
-    
-    private static UnitType chooseTowerType(int totalTowers) throws GameActionException {
-        if (totalTowers >= 12 && rc.getMoney() > 3000) {
-            return UnitType.LEVEL_ONE_DEFENSE_TOWER;
-        }
-        
-        return (totalTowers % 2 == 0)
-            ? UnitType.LEVEL_ONE_MONEY_TOWER
-            : UnitType.LEVEL_ONE_PAINT_TOWER;
-    }
-
-    
-    private static int chipsRequired(int totalTowers) {
-        if (totalTowers < 4)  return 700;
-        if (totalTowers < 10) return 800;
-        return 1000;
-    }
-
-    
-    private static MapLocation findBestExpandPaintTarget() throws GameActionException {
-        MapInfo[] tiles = rc.senseNearbyMapInfos(3); 
-        MapLocation myLoc = rc.getLocation();
-        MapLocation bestEnemy = null, bestEmpty = null;
-        int minED = Integer.MAX_VALUE, minEMD = Integer.MAX_VALUE;
-
-        for (MapInfo tile : tiles) {
-            if (!tile.isPassable()) continue;
-            MapLocation loc   = tile.getMapLocation();
-            PaintType   paint = tile.getPaint();
-            int         dist  = myLoc.distanceSquaredTo(loc);
-
-            if (!paint.isAlly() && paint != PaintType.EMPTY && dist < minED) {
-                minED = dist; bestEnemy = loc;
-            }
-            if (paint == PaintType.EMPTY && dist < minEMD) {
-                minEMD = dist; bestEmpty = loc;
-            }
-        }
-        return (bestEnemy != null) ? bestEnemy : bestEmpty;
-    }
-
-    
-    private static boolean isTowerBuiltAt(MapLocation loc) throws GameActionException {
-        if (!rc.canSenseLocation(loc)) return false;
-        if (!rc.canSenseRobotAtLocation(loc)) return false;
-        RobotInfo r = rc.senseRobotAtLocation(loc);
-        return r != null && isTowerType(r.getType()) && r.getTeam() == rc.getTeam();
-    }
-
-    
-    private static void detectStuck() {
-        MapLocation cur = rc.getLocation();
-        if (lastPos != null && cur.equals(lastPos)) {
-            posCount++;
-            if (posCount >= 6) {
-                currentExploreDirection = null;
-                exploreTarget           = null;
-                posCount = 0;
-                if (state == STATE_GOTO_RUIN || state == STATE_BUILD_TOWER) {
-                    ruinTarget    = null;
-                    patternMarked = false;
-                    paintTarget   = null;
-                    state = STATE_EXPLORE;
-                }
-            }
-        } else {
-            posCount = 0;
-        }
-        lastPos = cur;
-    }
-
-    private static void checkStuck() {
-        
     }
 }

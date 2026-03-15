@@ -9,7 +9,6 @@ import battlecode.common.PaintType;
 import battlecode.common.RobotInfo;
 import battlecode.common.UnitType;
 
-
 public class Unit extends BaseRobot {
 
     public static MapLocation spawnLocation;
@@ -18,310 +17,261 @@ public class Unit extends BaseRobot {
     public static int knownPaintTowerCount = 0;
     public static MapLocation[] knownAllyTowers = new MapLocation[25];
     public static int knownAllyTowerCount = 0;
-
     public static MapLocation[] knownRuins = new MapLocation[30];
     public static int knownRuinCount = 0;
-
     public static MapLocation returnLocation = null;
-
     public static MapLocation lastKnownEnemyLoc = null;
     public static int lastKnownEnemyRound = -1;
-    public static MapLocation exploreTarget = null;
-    public static int exploreTargetAge = 0;
+    public static MapLocation cachedPaintTowerLoc = null;
 
-    // Fungsi inisialisasi lokasi spawn
+    // Bug2 pathfinding
+    private static boolean huggingWall = false;
+    private static Direction wallDir = null;
+    private static int bugStartDist = 0;
+    private static MapLocation bugTarget = null;
+
+    // XOR-shift RNG
+    private static int rngState = 6147;
+
+    // 9-point exploration
+    private static MapLocation[] exploreTargets9 = null;
+    private static int exploreIdx9 = 0;
+
+    // Fungsi untuk inisialisasi unit
     public static void initUnit() {
         if (spawnLocation == null) {
             spawnLocation = rc.getLocation();
+            rngState ^= rc.getID();
         }
     }
 
-    // Fungsi bergerak greedy menuju target
-    public static void moveGreedy(MapLocation target) throws GameActionException {
-        if (!rc.isMovementReady()) return;
+    public static int rand() {
+        rngState ^= rngState << 13;
+        rngState ^= rngState >> 17;
+        rngState ^= rngState << 15;
+        return rngState & 0x7FFFFFFF;
+    }
 
+    // Fungsi untuk pathfinding Bug2
+    public static void bugNavigateTo(MapLocation target) throws GameActionException {
+        if (!rc.isMovementReady() || target == null) return;
         MapLocation myLoc = rc.getLocation();
-        Direction bestDir = null;
-        double bestScore = Double.NEGATIVE_INFINITY;
+        if (myLoc.equals(target)) return;
 
-        for (Direction dir : directions) {
-            if (!rc.canMove(dir)) continue;
-            MapLocation nextLoc = myLoc.add(dir);
-            double score = evaluateTile(nextLoc, target);
-            if (score > bestScore) {
-                bestScore = score;
-                bestDir = dir;
-            }
+        // Auto-reset saat target berubah
+        if (bugTarget == null || !bugTarget.equals(target)) {
+            huggingWall = false;
+            bugTarget = target;
         }
 
-        if (bestDir != null) {
-            rc.move(bestDir);
+        Direction dir = myLoc.directionTo(target);
+        if (rc.canMove(dir)) {
+            huggingWall = false;
+            rc.move(dir);
+        } else {
+            if (!huggingWall) {
+                huggingWall = true;
+                wallDir = dir;
+                bugStartDist = myLoc.distanceSquaredTo(target);
+            }
+            for (int i = 0; i < 8; i++) {
+                wallDir = wallDir.rotateRight();
+                if (rc.canMove(wallDir)) {
+                    rc.move(wallDir);
+                    break;
+                }
+            }
+            MapLocation newLoc = rc.getLocation();
+            Direction nd = newLoc.directionTo(target);
+            if (rc.canMove(nd) && newLoc.distanceSquaredTo(target) < bugStartDist) {
+                huggingWall = false;
+            }
         }
     }
 
-    // Fungsi menilai skor tile untuk pergerakan greedy
-    private static double evaluateTile(MapLocation loc, MapLocation target) throws GameActionException {
-        double score = 0;
+    // Backward compat — delegate ke Bug2
+    public static void moveGreedy(MapLocation target) throws GameActionException {
+        bugNavigateTo(target);
+    }
 
-        // Prioritaskan tile yang lebih dekat ke target
-        int distToTarget = loc.distanceSquaredTo(target);
-        score -= distToTarget * 2.0;
+    public static void moveSimple(MapLocation target) throws GameActionException {
+        bugNavigateTo(target);
+    }
 
-        if (rc.canSenseLocation(loc)) {
-            MapInfo info = rc.senseMapInfo(loc);
-            PaintType paint = info.getPaint();
+    public static boolean tryMove(Direction dir) throws GameActionException {
+        if (rc.canMove(dir)) { rc.move(dir); return true; }
+        return false;
+    }
 
-            if (paint.isAlly()) {
-                score += 8; // lebih aman berjalan di area ally
-            } else if (paint == PaintType.EMPTY) {
-                score += 2;
-            } else {
-                score -= 10; // hindari cat musuh
-            }
+    // Fungsi untuk eksplorasi 9 titik
+    private static MapLocation currentExploreTarget9() {
+        if (exploreTargets9 == null) {
+            int W = rc.getMapWidth(), H = rc.getMapHeight();
+            int mX = W / 2, mY = H / 2;
+            exploreTargets9 = new MapLocation[]{
+                new MapLocation(2, 2),
+                new MapLocation(W - 3, H - 3),
+                new MapLocation(2, H - 3),
+                new MapLocation(W - 3, 2),
+                new MapLocation(mX, mY),
+                new MapLocation(mX, 2),
+                new MapLocation(2, mY),
+                new MapLocation(W - 3, mY),
+                new MapLocation(mX, H - 3),
+            };
+            exploreIdx9 = rand() % exploreTargets9.length;
+        }
+        MapLocation t = exploreTargets9[exploreIdx9 % exploreTargets9.length];
+        if (rc.getLocation().distanceSquaredTo(t) <= 8) {
+            exploreIdx9 = (exploreIdx9 + 1) % exploreTargets9.length;
+            t = exploreTargets9[exploreIdx9];
+        }
+        return t;
+    }
 
-            if (isNearEnemyTower(loc)) {
-                score -= 30; // jauhi jangkauan tower musuh
+    public static void explore() throws GameActionException {
+        if (!rc.isMovementReady()) return;
+        bugNavigateTo(currentExploreTarget9());
+    }
+
+    // Fungsi untuk upgrade tower oleh unit
+    public static boolean tryUpgradeNearbyTower() throws GameActionException {
+        if (rc.getMoney() < 2500 || rc.getNumberTowers() < 3) return false;
+        if (!rc.isActionReady()) return false;
+
+        RobotInfo[] allies = rc.senseNearbyRobots(2, rc.getTeam());
+        RobotInfo bestTower = null;
+        int bestPriority = 0;
+
+        for (RobotInfo ally : allies) {
+            if (!isTowerType(ally.getType())) continue;
+            int priority = 0;
+            if (ally.getType() == UnitType.LEVEL_ONE_PAINT_TOWER) priority = 100;
+            else if (ally.getType() == UnitType.LEVEL_ONE_MONEY_TOWER) priority = 80;
+            else if (ally.getType() == UnitType.LEVEL_TWO_PAINT_TOWER) priority = 60;
+            else if (ally.getType() == UnitType.LEVEL_TWO_MONEY_TOWER) priority = 50;
+            else if (ally.getType() == UnitType.LEVEL_ONE_DEFENSE_TOWER) priority = 40;
+            else if (ally.getType() == UnitType.LEVEL_TWO_DEFENSE_TOWER) priority = 30;
+
+            if (priority > bestPriority) {
+                bestPriority = priority;
+                bestTower = ally;
             }
         }
 
-        return score;
-    }
-
-    // Fungsi cek apakah lokasi dekat tower musuh
-    private static boolean isNearEnemyTower(MapLocation loc) throws GameActionException {
-        RobotInfo[] nearbyEnemies = rc.senseNearbyRobots(loc, 9, rc.getTeam().opponent());
-        for (RobotInfo enemy : nearbyEnemies) {
-            if (isTowerType(enemy.getType())) {
-                return true;
-            }
+        if (bestTower != null && rc.canUpgradeTower(bestTower.getLocation())) {
+            rc.upgradeTower(bestTower.getLocation());
+            return true;
         }
         return false;
     }
 
-    // Fungsi bergerak sederhana menuju target tanpa scoring
-    public static void moveSimple(MapLocation target) throws GameActionException {
-        if (!rc.isMovementReady()) return;
-
-        MapLocation myLoc = rc.getLocation();
-        Direction bestDir = null;
-        int minDist = myLoc.distanceSquaredTo(target);
-
-        for (Direction dir : directions) {
-            if (!rc.canMove(dir)) continue;
-            MapLocation next = myLoc.add(dir);
-            int dist = next.distanceSquaredTo(target);
-            if (dist < minDist) {
-                minDist = dist;
-                bestDir = dir;
-            }
-        }
-
-        if (bestDir != null) {
-            rc.move(bestDir);
-        }
-    }
-
-    // Fungsi mencoba membangun tower di ruin terdekat
-    public static boolean tryBuildTower() throws GameActionException {
-        MapLocation myLoc = rc.getLocation();
-        MapInfo[] nearbyTiles = rc.senseNearbyMapInfos(-1);
-
-        MapLocation targetRuin = null;
-        int minDistance = Integer.MAX_VALUE;
-
-        for (MapInfo tile : nearbyTiles) {
-            if (!tile.hasRuin()) continue;
-            MapLocation ruinLoc = tile.getMapLocation();
-
-            // Skip ruin yang sudah ada tower
-            if (rc.canSenseRobotAtLocation(ruinLoc)) {
-                RobotInfo robot = rc.senseRobotAtLocation(ruinLoc);
-                if (robot != null && isTowerType(robot.getType())) {
-                    continue;
-                }
-            }
-
-            int dist = myLoc.distanceSquaredTo(ruinLoc);
-            if (dist < minDistance) {
-                minDistance = dist;
-                targetRuin = ruinLoc;
-            }
-        }
-
-        if (targetRuin == null) return false;
-
-        UnitType towerToBuild = chooseTowerType();
-        int requiredChips = (towerToBuild == UnitType.LEVEL_ONE_DEFENSE_TOWER) ? 2500 : 1000;
-
-        if (rc.getMoney() < requiredChips) {
-            // Tunggu dekat ruin jika hampir cukup chips
-            if (myLoc.distanceSquaredTo(targetRuin) <= 2 && rc.getMoney() >= requiredChips - 300) {
-                return true;
-            }
-            return false;
-        }
-
-        if (rc.canCompleteTowerPattern(towerToBuild, targetRuin)) {
-            rc.completeTowerPattern(towerToBuild, targetRuin);
-            if (isPaintTower(towerToBuild)) {
-                addKnownPaintTower(targetRuin);
-            }
-            addKnownAllyTower(targetRuin);
-            return true;
-        }
-
-        if (rc.canMarkTowerPattern(towerToBuild, targetRuin)) {
-            rc.markTowerPattern(towerToBuild, targetRuin);
-        }
-
-        // Dekati ruin jika masih jauh
-        if (myLoc.distanceSquaredTo(targetRuin) > 2) {
-            if (rc.isMovementReady()) {
-                moveGreedy(targetRuin);
-                return true;
-            }
-        }
-
-        paintMarkedTilesAround(targetRuin);
-
-        return true;
-    }
-
-    // Fungsi memilih tipe tower berdasarkan kondisi saat ini
-    private static UnitType chooseTowerType() throws GameActionException {
-        int totalTowers = rc.getNumberTowers();
-        int chips = rc.getMoney();
-        @SuppressWarnings("unused") int round = rc.getRoundNum();
-
-        if (totalTowers < 2) {
-            return UnitType.LEVEL_ONE_MONEY_TOWER;
-        }
-
-        // Hitung jumlah tower paint dan money yang terlihat
-        int paintCount = 0;
-        int moneyCount = 0;
-        RobotInfo[] allies = rc.senseNearbyRobots(-1, rc.getTeam());
-        for (RobotInfo ally : allies) {
-            if (isPaintTower(ally.getType())) paintCount++;
-            else if (isMoneyTower(ally.getType())) moneyCount++;
-        }
-
-        if (totalTowers < 4) {
-            if (paintCount == 0) return UnitType.LEVEL_ONE_PAINT_TOWER;
-            return UnitType.LEVEL_ONE_MONEY_TOWER;
-        }
-
-        if (totalTowers < 7) {
-            // Seimbangkan paint dan money tower
-            if (paintCount <= moneyCount) return UnitType.LEVEL_ONE_PAINT_TOWER;
-            return UnitType.LEVEL_ONE_MONEY_TOWER;
-        }
-
-        // Tower defense jika sudah banyak tower dan chips cukup
-        if (totalTowers >= 10 && chips > 2000) {
-            return UnitType.LEVEL_ONE_DEFENSE_TOWER;
-        }
-
-        if (chips > 2000) {
-            return UnitType.LEVEL_ONE_PAINT_TOWER;
-        }
-        return UnitType.LEVEL_ONE_MONEY_TOWER;
-    }
-
-    // Fungsi mengecat tile yang sudah ditandai di sekitar ruin
-    private static void paintMarkedTilesAround(MapLocation center) throws GameActionException {
+    // Fungsi untuk mengecat tile saat eksplorasi
+    public static void paintNearbyTile() throws GameActionException {
         if (!rc.isActionReady()) return;
+        MapLocation myLoc = rc.getLocation();
 
-        MapInfo[] nearbyTiles = rc.senseNearbyMapInfos(center, 8);
-        for (MapInfo tile : nearbyTiles) {
-            MapLocation loc = tile.getMapLocation();
-            PaintType mark = tile.getMark();
-            PaintType paint = tile.getPaint();
-
-            // Cat tile yang belum sesuai dengan markingnya
-            if (mark != PaintType.EMPTY && mark != paint && tile.isPassable()) {
-                boolean useSecondary = (mark == PaintType.ALLY_SECONDARY);
-                if (rc.canAttack(loc)) {
-                    rc.attack(loc, useSecondary);
+        // Cat tile di bawah diri dulu
+        if (rc.canSenseLocation(myLoc)) {
+            MapInfo info = rc.senseMapInfo(myLoc);
+            if (info.isPassable() && !info.getPaint().isAlly()) {
+                PaintType mark = info.getMark();
+                boolean useSec = (mark == PaintType.ALLY_SECONDARY);
+                if (rc.canAttack(myLoc)) {
+                    rc.attack(myLoc, useSec);
                     return;
                 }
             }
         }
-    }
 
-    // Fungsi cek apakah kondisi memungkinkan membangun SRP
-    public static boolean shouldBuildSRP() throws GameActionException {
-        int totalTowers = rc.getNumberTowers();
-        int chips = rc.getMoney();
-        int round = rc.getRoundNum();
+        // Cat tile kosong terdekat dalam attack range
+        MapInfo[] tiles = rc.senseNearbyMapInfos(rc.getType().actionRadiusSquared);
+        MapLocation best = null;
+        int minDist = Integer.MAX_VALUE;
+        boolean bestSec = false;
 
-        // Minimal tower tergantung ukuran map
-        int mapWidth = rc.getMapWidth();
-        int mapHeight = rc.getMapHeight();
-        int minTowers = Math.max(4, 6 - Math.min(mapWidth, mapHeight) / 10);
-
-        return totalTowers >= minTowers && chips >= 500 && round > EARLY_GAME_END;
-    }
-
-    // Fungsi mencoba membangun SRP di lokasi saat ini
-    public static boolean tryBuildSRP() throws GameActionException {
-        if (!shouldBuildSRP()) return false;
-
-        MapLocation myLoc = rc.getLocation();
-
-        // Cek apakah bisa menyelesaikan SRP yang sudah ada
-        MapInfo[] nearbyTiles = rc.senseNearbyMapInfos(-1);
-        for (MapInfo tile : nearbyTiles) {
-            MapLocation loc = tile.getMapLocation();
-            if (rc.canCompleteResourcePattern(loc)) {
-                rc.completeResourcePattern(loc);
-                return true;
+        for (MapInfo tile : tiles) {
+            if (!tile.isPassable()) continue;
+            PaintType paint = tile.getPaint();
+            if (paint == PaintType.EMPTY) {
+                MapLocation loc = tile.getMapLocation();
+                int dist = myLoc.distanceSquaredTo(loc);
+                if (dist < minDist && rc.canAttack(loc)) {
+                    minDist = dist;
+                    best = loc;
+                    bestSec = (tile.getMark() == PaintType.ALLY_SECONDARY);
+                }
             }
         }
 
-        if (rc.canMarkResourcePattern(myLoc)) {
-            rc.markResourcePattern(myLoc);
-            return true;
+        if (best != null) {
+            rc.attack(best, bestSec);
         }
-
-        return false;
     }
 
-    // Fungsi mengisi ulang paint di tower terdekat
+    // Fungsi untuk estimasi lokasi musuh
+    public static MapLocation resolveEnemyLocation() throws GameActionException {
+        if (lastKnownEnemyLoc != null && rc.getRoundNum() - lastKnownEnemyRound < 100) {
+            return lastKnownEnemyLoc;
+        }
+        int W = rc.getMapWidth(), H = rc.getMapHeight();
+        RobotInfo[] allies = rc.senseNearbyRobots(-1, rc.getTeam());
+        for (RobotInfo ally : allies) {
+            if (isTowerType(ally.getType())) {
+                MapLocation aLoc = ally.getLocation();
+                return new MapLocation(W - 1 - aLoc.x, H - 1 - aLoc.y);
+            }
+        }
+        return new MapLocation(W / 2, H / 2);
+    }
+
+    // Fungsi untuk helper SRP
+    public static boolean isResourcePatternCenter(MapLocation loc) {
+        return loc.x % 4 == 2 && loc.y % 4 == 2;
+    }
+
+    public static MapLocation snapToSRPGrid(MapLocation loc) {
+        int x = (loc.x / 4) * 4 + 2;
+        int y = (loc.y / 4) * 4 + 2;
+        int W = rc.getMapWidth(), H = rc.getMapHeight();
+        x = Math.max(2, Math.min(W - 3, x));
+        y = Math.max(2, Math.min(H - 3, y));
+        return new MapLocation(x, y);
+    }
+
+    public static boolean canStartSRP(MapLocation loc) throws GameActionException {
+        if (!isResourcePatternCenter(loc)) return false;
+        if (!rc.canSenseLocation(loc)) return false;
+        if (rc.senseMapInfo(loc).getMark() != PaintType.EMPTY) return false;
+        MapInfo[] area = rc.senseNearbyMapInfos(loc, 8);
+        for (MapInfo t : area) {
+            if (t.hasRuin()) return false;
+        }
+        return rc.canMarkResourcePattern(loc);
+    }
+
+    // Fungsi untuk mengisi ulang paint
     public static boolean refillPaint() throws GameActionException {
         int paintCapacity = rc.getType().paintCapacity;
         int currentPaint = rc.getPaint();
         int paintPercent = (currentPaint * 100) / paintCapacity;
-
         if (paintPercent > REFILL_PAINT_PERCENT) return false;
 
         MapLocation nearestPaintTower = findNearestPaintTower();
-
-        if (nearestPaintTower == null) {
-            nearestPaintTower = findNearestKnownPaintTower();
-        }
-
-        // Fallback ke spawn jika tidak ada paint tower yang diketahui
-        if (nearestPaintTower == null && spawnLocation != null) {
-            nearestPaintTower = spawnLocation;
-        }
-
+        if (nearestPaintTower == null) nearestPaintTower = findNearestKnownPaintTower();
+        if (nearestPaintTower == null && cachedPaintTowerLoc != null) nearestPaintTower = cachedPaintTowerLoc;
+        if (nearestPaintTower == null && spawnLocation != null) nearestPaintTower = spawnLocation;
         if (nearestPaintTower == null) return false;
 
         int dist = rc.getLocation().distanceSquaredTo(nearestPaintTower);
-
         if (dist <= 2) {
             withdrawPaint(nearestPaintTower);
-        } else {
-            if (rc.isMovementReady()) {
-                moveGreedy(nearestPaintTower);
-            }
+        } else if (rc.isMovementReady()) {
+            bugNavigateTo(nearestPaintTower);
         }
-
         return true;
     }
 
-    // Fungsi mencari paint tower yang terlihat saat ini
     private static MapLocation findNearestPaintTower() throws GameActionException {
         RobotInfo[] allies = rc.senseNearbyRobots(-1, rc.getTeam());
         MapLocation nearest = null;
@@ -334,7 +284,7 @@ public class Unit extends BaseRobot {
                     minDist = dist;
                     nearest = ally.getLocation();
                 }
-                addKnownPaintTower(ally.getLocation()); // update cache
+                addKnownPaintTower(ally.getLocation());
             }
             if (isTowerType(ally.getType())) {
                 addKnownAllyTower(ally.getLocation());
@@ -343,29 +293,21 @@ public class Unit extends BaseRobot {
         return nearest;
     }
 
-    // Fungsi mencari paint tower dari cache yang diketahui
     private static MapLocation findNearestKnownPaintTower() {
         MapLocation myLoc = rc.getLocation();
         MapLocation nearest = null;
         int minDist = Integer.MAX_VALUE;
-
         for (int i = 0; i < knownPaintTowerCount; i++) {
             int dist = myLoc.distanceSquaredTo(knownPaintTowers[i]);
-            if (dist < minDist) {
-                minDist = dist;
-                nearest = knownPaintTowers[i];
-            }
+            if (dist < minDist) { minDist = dist; nearest = knownPaintTowers[i]; }
         }
         return nearest;
     }
 
-    // Fungsi mengambil paint dari tower ally
     private static void withdrawPaint(MapLocation towerLoc) throws GameActionException {
         if (!rc.isActionReady()) return;
-
         int needed = rc.getType().paintCapacity - rc.getPaint();
         if (needed <= 0) return;
-
         if (rc.canSenseRobotAtLocation(towerLoc)) {
             RobotInfo tower = rc.senseRobotAtLocation(towerLoc);
             if (tower != null && tower.getTeam() == rc.getTeam()) {
@@ -378,25 +320,22 @@ public class Unit extends BaseRobot {
         }
     }
 
-    // Fungsi broadcast lokasi musuh ke tower ally
+    // Fungsi untuk broadcast dan komunikasi
     public static void broadcastEnemyLocation(MapLocation enemyLoc) throws GameActionException {
         int msg = encodeMessage(MSG_ENEMY_LOC, enemyLoc.x, enemyLoc.y, rc.getRoundNum() % EXTRA_MASK);
-
         RobotInfo[] allies = rc.senseNearbyRobots(-1, rc.getTeam());
         for (RobotInfo ally : allies) {
             if (isTowerType(ally.getType())) {
                 if (rc.canSendMessage(ally.getLocation(), msg)) {
                     rc.sendMessage(ally.getLocation(), msg);
-                    return; // cukup satu tower
+                    return;
                 }
             }
         }
     }
 
-    // Fungsi broadcast lokasi tower musuh ke tower ally
     public static void broadcastEnemyTower(MapLocation towerLoc) throws GameActionException {
         int msg = encodeMessage(MSG_ENEMY_TOWER, towerLoc.x, towerLoc.y, rc.getRoundNum() % EXTRA_MASK);
-
         RobotInfo[] allies = rc.senseNearbyRobots(-1, rc.getTeam());
         for (RobotInfo ally : allies) {
             if (isTowerType(ally.getType())) {
@@ -408,10 +347,8 @@ public class Unit extends BaseRobot {
         }
     }
 
-    // Fungsi request mopper ke tower terdekat
     public static void requestMopper(MapLocation loc) throws GameActionException {
         int msg = encodeMessage(MSG_MOPPER_REQ, loc.x, loc.y, rc.getRoundNum() % EXTRA_MASK);
-
         RobotInfo[] allies = rc.senseNearbyRobots(-1, rc.getTeam());
         for (RobotInfo ally : allies) {
             if (isTowerType(ally.getType())) {
@@ -423,10 +360,20 @@ public class Unit extends BaseRobot {
         }
     }
 
-    // Fungsi broadcast lokasi ruin ke tower ally
     public static void broadcastRuin(MapLocation ruinLoc) throws GameActionException {
         int msg = encodeMessage(MSG_RUIN_LOC, ruinLoc.x, ruinLoc.y, rc.getRoundNum() % EXTRA_MASK);
+        RobotInfo[] allies = rc.senseNearbyRobots(-1, rc.getTeam());
+        int sent = 0;
+        for (RobotInfo ally : allies) {
+            if (rc.canSendMessage(ally.getLocation(), msg)) {
+                rc.sendMessage(ally.getLocation(), msg);
+                if (++sent >= 3) break;
+            }
+        }
+    }
 
+    public static void broadcastRuinReady(MapLocation ruinLoc) throws GameActionException {
+        int msg = encodeMessage(MSG_RUIN_READY, ruinLoc.x, ruinLoc.y, rc.getRoundNum() % EXTRA_MASK);
         RobotInfo[] allies = rc.senseNearbyRobots(-1, rc.getTeam());
         for (RobotInfo ally : allies) {
             if (isTowerType(ally.getType())) {
@@ -438,11 +385,9 @@ public class Unit extends BaseRobot {
         }
     }
 
-    // Fungsi membaca pesan broadcast dan memilih target terdekat
     public static MapLocation readBroadcastTarget(int msgType) throws GameActionException {
         Message[] messages = rc.readMessages(-1);
         if (messages.length == 0) return null;
-
         MapLocation bestLoc = null;
         int bestDist = Integer.MAX_VALUE;
         int currentRound = rc.getRoundNum();
@@ -450,40 +395,29 @@ public class Unit extends BaseRobot {
         for (Message m : messages) {
             int msg = m.getBytes();
             int type = decodeType(msg);
-
             if (type != msgType) continue;
-
             int sentRound = decodeExtra(msg);
             int age = (currentRound - sentRound) % EXTRA_MASK;
-
-            // Hanya proses pesan yang masih segar
             if (age <= 10 || age > 2000) {
                 int x = decodeX(msg);
                 int y = decodeY(msg);
                 MapLocation loc = new MapLocation(x, y);
                 int dist = rc.getLocation().distanceSquaredTo(loc);
-                if (dist < bestDist) {
-                    bestDist = dist;
-                    bestLoc = loc;
-                }
+                if (dist < bestDist) { bestDist = dist; bestLoc = loc; }
             }
         }
-
         return bestLoc;
     }
 
-    // Fungsi memproses semua pesan masuk dan update state lokal
     public static void processMessages() throws GameActionException {
         Message[] messages = rc.readMessages(-1);
         int currentRound = rc.getRoundNum();
-
         for (Message m : messages) {
             int msg = m.getBytes();
             int type = decodeType(msg);
             int x = decodeX(msg);
             int y = decodeY(msg);
             MapLocation loc = new MapLocation(x, y);
-
             switch (type) {
                 case MSG_TOWER_LOC:
                     addKnownAllyTower(loc);
@@ -495,18 +429,22 @@ public class Unit extends BaseRobot {
                 case MSG_RUIN_LOC:
                     addKnownRuin(loc);
                     break;
+                case MSG_PAINT_TOWER:
+                    addKnownPaintTower(loc);
+                    addKnownAllyTower(loc);
+                    cachedPaintTowerLoc = loc;
+                    break;
                 default:
                     break;
             }
         }
     }
 
-    // Fungsi memindai lingkungan sekitar dan update cache
+    // Fungsi untuk memindai lingkungan
     public static void scanEnvironment() throws GameActionException {
         RobotInfo[] allies = rc.senseNearbyRobots(-1, rc.getTeam());
         RobotInfo[] enemies = rc.senseNearbyRobots(-1, rc.getTeam().opponent());
 
-        // Update cache tower ally
         for (RobotInfo ally : allies) {
             if (isTowerType(ally.getType())) {
                 addKnownAllyTower(ally.getLocation());
@@ -516,11 +454,9 @@ public class Unit extends BaseRobot {
             }
         }
 
-        // Catat musuh dan broadcast tower musuh
         if (enemies.length > 0) {
             lastKnownEnemyLoc = enemies[0].getLocation();
             lastKnownEnemyRound = rc.getRoundNum();
-
             for (RobotInfo enemy : enemies) {
                 if (isTowerType(enemy.getType())) {
                     broadcastEnemyTower(enemy.getLocation());
@@ -529,7 +465,6 @@ public class Unit extends BaseRobot {
             }
         }
 
-        // Update cache ruin yang terlihat
         MapInfo[] nearbyTiles = rc.senseNearbyMapInfos(-1);
         for (MapInfo tile : nearbyTiles) {
             if (tile.hasRuin()) {
@@ -543,59 +478,15 @@ public class Unit extends BaseRobot {
         }
     }
 
-    // Fungsi eksplorasi berbasis zona untuk menyebar robot secara merata
-    public static void explore() throws GameActionException {
-        if (!rc.isMovementReady()) return;
-        MapLocation myLoc = rc.getLocation();
-        // Perbarui target jika belum ada, sudah dicapai, atau terlalu lama
-        if (exploreTarget == null
-                || myLoc.distanceSquaredTo(exploreTarget) <= 9
-                || ++exploreTargetAge > 80) {
-            exploreTarget = pickExploreTarget();
-            exploreTargetAge = 0;
-        }
-
-        moveGreedy(exploreTarget);
-    }
-
-    // Fungsi memilih target zona berdasarkan ID robot
-    public static MapLocation pickExploreTarget() {
-        int W = rc.getMapWidth();
-        int H = rc.getMapHeight();
-        int id = rc.getID();
-
-        int gx, gy;
-        switch (id % 8) {
-            case 0: gx = W / 4;     gy = H / 4;     break; // kiri-bawah
-            case 1: gx = 3 * W / 4; gy = H / 4;     break; // kanan-bawah
-            case 2: gx = W / 4;     gy = 3 * H / 4; break; // kiri-atas
-            case 3: gx = 3 * W / 4; gy = 3 * H / 4; break; // kanan-atas
-            case 4: gx = W / 2;     gy = H / 4;     break; // bawah-tengah
-            case 5: gx = W / 2;     gy = 3 * H / 4; break; // atas-tengah
-            case 6: gx = W / 4;     gy = H / 2;     break; // kiri-tengah
-            default: gx = 3 * W / 4; gy = H / 2;    break; // kanan-tengah
-        }
-
-        // Offset kecil untuk cegah clustering di titik yang sama
-        gx = Math.max(2, Math.min(W - 3, gx + (id * 3 % 7) - 3));
-        gy = Math.max(2, Math.min(H - 3, gy + (id * 5 % 7) - 3));
-
-        return new MapLocation(gx, gy);
-    }
-
-    // Fungsi jalan acak jika tidak ada target
+    // Fungsi utilitas
     public static void wander() throws GameActionException {
         if (!rc.isMovementReady()) return;
-
         if (currentExploreDirection == null || !rc.canMove(currentExploreDirection)) {
-            int randomIndex = (int) (Math.random() * directions.length);
-            currentExploreDirection = directions[randomIndex];
+            currentExploreDirection = directions[rand() % directions.length];
         }
-
         if (rc.canMove(currentExploreDirection)) {
             rc.move(currentExploreDirection);
         } else {
-            // Coba rotasi sampai menemukan arah yang bisa
             for (int i = 0; i < 8; i++) {
                 currentExploreDirection = currentExploreDirection.rotateRight();
                 if (rc.canMove(currentExploreDirection)) {
@@ -606,10 +497,8 @@ public class Unit extends BaseRobot {
         }
     }
 
-    // Fungsi mengecat tile di bawah robot jika belum di-paint
     public static void paintUnderSelf() throws GameActionException {
         if (!rc.isActionReady()) return;
-
         MapLocation myLoc = rc.getLocation();
         if (!rc.canSenseLocation(myLoc)) return;
         MapInfo info = rc.senseMapInfo(myLoc);
@@ -620,7 +509,7 @@ public class Unit extends BaseRobot {
         }
     }
 
-    // Fungsi menambah paint tower ke cache jika belum ada
+    // Fungsi untuk manajemen cache
     public static void addKnownPaintTower(MapLocation loc) {
         for (int i = 0; i < knownPaintTowerCount; i++) {
             if (knownPaintTowers[i].equals(loc)) return;
@@ -630,7 +519,6 @@ public class Unit extends BaseRobot {
         }
     }
 
-    // Fungsi menambah ally tower ke cache jika belum ada
     public static void addKnownAllyTower(MapLocation loc) {
         for (int i = 0; i < knownAllyTowerCount; i++) {
             if (knownAllyTowers[i].equals(loc)) return;
@@ -640,7 +528,6 @@ public class Unit extends BaseRobot {
         }
     }
 
-    // Fungsi menambah ruin ke cache jika belum ada
     public static void addKnownRuin(MapLocation loc) {
         for (int i = 0; i < knownRuinCount; i++) {
             if (knownRuins[i].equals(loc)) return;
@@ -650,23 +537,17 @@ public class Unit extends BaseRobot {
         }
     }
 
-    // Fungsi mencari ruin terdekat dari cache
     public static MapLocation findNearestKnownRuin() {
         MapLocation myLoc = rc.getLocation();
         MapLocation nearest = null;
         int minDist = Integer.MAX_VALUE;
-
         for (int i = 0; i < knownRuinCount; i++) {
             int dist = myLoc.distanceSquaredTo(knownRuins[i]);
-            if (dist < minDist) {
-                minDist = dist;
-                nearest = knownRuins[i];
-            }
+            if (dist < minDist) { minDist = dist; nearest = knownRuins[i]; }
         }
         return nearest;
     }
 
-    // Fungsi menghapus ruin dari cache
     public static void removeKnownRuin(MapLocation loc) {
         for (int i = 0; i < knownRuinCount; i++) {
             if (knownRuins[i].equals(loc)) {
@@ -677,7 +558,6 @@ public class Unit extends BaseRobot {
         }
     }
 
-    // Fungsi mendapatkan fase permainan saat ini
     public static int getGamePhase() {
         int round = rc.getRoundNum();
         if (round < EARLY_GAME_END) return 0;
@@ -685,19 +565,14 @@ public class Unit extends BaseRobot {
         return 2;
     }
 
-    // Fungsi cek apakah paint unit rendah
     public static boolean isLowPaint() {
-        int paintCapacity = rc.getType().paintCapacity;
-        int currentPaint = rc.getPaint();
-        return (currentPaint * 100 / paintCapacity) < LOW_PAINT_PERCENT;
+        return (rc.getPaint() * 100 / rc.getType().paintCapacity) < LOW_PAINT_PERCENT;
     }
 
-    // Fungsi menghitung jumlah ally terdekat
     public static int countNearbyAllies() throws GameActionException {
         return rc.senseNearbyRobots(-1, rc.getTeam()).length;
     }
 
-    // Fungsi menghitung jumlah musuh terdekat
     public static int countNearbyEnemies() throws GameActionException {
         return rc.senseNearbyRobots(-1, rc.getTeam().opponent()).length;
     }

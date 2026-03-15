@@ -55,7 +55,9 @@ public class BaseRobot {
     public static final int MSG_TOWER_LOC = 2;       
     public static final int MSG_MOPPER_REQ = 3;      
     public static final int MSG_RUIN_LOC = 4;        
-    public static final int MSG_ENEMY_TOWER = 5;     
+    public static final int MSG_ENEMY_TOWER = 5;
+    public static final int MSG_RUIN_READY = 6;
+    public static final int MSG_PAINT_TOWER = 7;
 
     
     public static final int COORD_BITS = 6;
