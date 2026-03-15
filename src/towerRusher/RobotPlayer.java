@@ -18,7 +18,7 @@ public class RobotPlayer {
     static int mapHeight;
     static boolean mapDimensionFound = false;
 
-    static private int cornerIdx = rng.nextInt(4);
+    static private int cornerIdx = -1;
 
     static private LocationMemory knownTTL = new LocationMemory();
 
@@ -278,21 +278,16 @@ public class RobotPlayer {
     }
 
     public static void runEmergencySplasher(RobotController rc) throws GameActionException {
-        MapLocation[] mapCorners = {
-            new MapLocation(0, 0),
-            new MapLocation(mapWidth, 0),
-            new MapLocation(mapWidth, mapHeight),
-            new MapLocation(0,mapHeight)
-        };
+        MapLocation[] mapCorners = mainMapSearchPoints();
         if (rc.canAttack(rc.getLocation())) {
             rc.attack(rc.getLocation());
         }
         if(rc.canSenseLocation(mapCorners[cornerIdx])) {
             int d = 1;
             if (goClockwise) {
-                d = 3;
+                d = 4;
             }
-            cornerIdx = (cornerIdx + d) % 4;
+            cornerIdx = (cornerIdx + d) % 5;
         }
         if(rc.getActionCooldownTurns() <= 0) {
             RobotMovement.smartMove(rc, mapCorners[cornerIdx]);
@@ -302,17 +297,12 @@ public class RobotPlayer {
 
     public static void runMopper(RobotController rc) throws GameActionException{
         readAndDecodeMessages(rc);
-        MapLocation[] mapCorners = {
-            new MapLocation(0, 0),
-            new MapLocation(mapWidth, 0),
-            new MapLocation(mapWidth, mapHeight),
-            new MapLocation(0,mapHeight)
-        };
+        MapLocation[] mapCorners = mainMapSearchPoints();
 
         if(rc.canSenseLocation(mapCorners[cornerIdx])) {
             int d = 1;
-            if (goClockwise) d = 3;
-            cornerIdx = (cornerIdx + d) % 4;
+            if (goClockwise) d = 4;
+            cornerIdx = (cornerIdx + d) % 5;
         }
         RobotMovement.mopperMove(rc, mapCorners[cornerIdx]);
         Direction dir = directions[rng.nextInt(directions.length)];
@@ -380,9 +370,9 @@ public class RobotPlayer {
         MapLocation[] searchPoints = new MapLocation[5];
         MapLocation[] mapCorners = {
             new MapLocation(0, 0),
-            new MapLocation(mapWidth, 0),
-            new MapLocation(mapWidth, mapHeight),
-            new MapLocation(0,mapHeight)
+            new MapLocation(mapWidth - 3, 0),
+            new MapLocation(mapWidth - 3, mapHeight - 3),
+            new MapLocation(0,mapHeight - 3)
         };
         MapLocation spawnTowerLoc = knownTTL.savedLocations[0];
         MapLocation possibleEnemyTowerLoc = new MapLocation(mapWidth - spawnTowerLoc.x, mapHeight - spawnTowerLoc.y);
@@ -399,11 +389,11 @@ public class RobotPlayer {
             if ((nearestPointIdx + 1) > i) {
                 searchPoints[i] = mapCorners[i];
             }
-            else if ((nearestPointIdx + 1) == i) {
+            else if (((nearestPointIdx + 1) % 5) == i) {
                 searchPoints[i] = possibleEnemyTowerLoc;
             }
             else {
-                searchPoints[i] = mapCorners[i + 1];
+                searchPoints[i] = mapCorners[i - 1];
             }
         }
 
@@ -413,19 +403,14 @@ public class RobotPlayer {
     public static void scoutMap(RobotController rc) throws GameActionException {
         if (!mapDimensionFound) return;
         if (!goBackToTower) {
-            MapLocation[] mapCorners = {
-                new MapLocation(0, 0),
-                new MapLocation(mapWidth, 0),
-                new MapLocation(mapWidth, mapHeight),
-                new MapLocation(0,mapHeight)
-            };
+            MapLocation[] mapCorners = mainMapSearchPoints();
 
             if(rc.canSenseLocation(mapCorners[cornerIdx])) {
                 int d = 1;
                 if (goClockwise) {
-                    d = 3;
+                    d = 4;
                 }
-                cornerIdx = (cornerIdx + 3) % 4;
+                cornerIdx = (cornerIdx + d) % 5;
             }
             RobotMovement.smartMove(rc, mapCorners[cornerIdx]);
         }
@@ -586,8 +571,9 @@ public class RobotPlayer {
         String numString = "1";
         numString += mapWidth;
         numString += mapHeight;
-        numString += rng.nextInt(8);
+        numString += rng.nextInt(10);
         numString += "01";
+        System.out.println(numString);
         return Integer.valueOf(numString);
     }
 
@@ -595,7 +581,7 @@ public class RobotPlayer {
         String numString = "1";
         numString += mapWidth;
         numString += mapHeight;
-        numString += rng.nextInt(8);
+        numString += rng.nextInt(10);
         numString += "05";
         return Integer.valueOf(numString);
     }
@@ -652,8 +638,10 @@ public class RobotPlayer {
             mapWidth = Integer.valueOf(numString.substring(1,3));
             mapHeight = Integer.valueOf(numString.substring(3,5));
             mapDimensionFound = true;
-            cornerIdx = (numString.charAt(5) - '0') % 4;
-            goClockwise = (numString.charAt(5) - '0') >= 4;
+            if (cornerIdx == -1) {
+                cornerIdx = (numString.charAt(5) - '0') % 5;
+                goClockwise = (numString.charAt(5) - '0') >= 5;
+            }
             robotRole = messageType;
         }
         else if (messageType == 2 && robotRole != 4) {
