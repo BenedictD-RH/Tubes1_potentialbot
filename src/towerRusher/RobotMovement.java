@@ -1,162 +1,31 @@
 package towerRusher;
 
 import battlecode.common.*;
+
 public class RobotMovement {
 
-    static final Direction[] directions = {
-        Direction.NORTH,
-        Direction.NORTHEAST,
-        Direction.EAST,
-        Direction.SOUTHEAST,
-        Direction.SOUTH,
-        Direction.SOUTHWEST,
-        Direction.WEST,
-        Direction.NORTHWEST,
+    public static final Direction[] DIRECTIONS = {
+            Direction.NORTH, Direction.NORTHEAST, Direction.EAST, Direction.SOUTHEAST,
+            Direction.SOUTH, Direction.SOUTHWEST, Direction.WEST, Direction.NORTHWEST
     };
 
-    static boolean clockwiseRotation = true;
+    public static final Direction[] CARDINAL_DIRECTIONS = {
+            Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST
+    };
 
-    static Direction[] pathfindStack = new Direction[8];
+    private static MapLocation lastTarget = null;
 
-    static int stackCount = 0;
+    private static boolean tracing = false;
+    private static Direction traceHeading = Direction.CENTER;
+    private static Direction lastMove = Direction.CENTER;
 
-    private static boolean huggingWall = false;
-    private static Direction wallDir = null;
-    private static int bugStartDist = 0;
-    private static MapLocation bugTarget = null;
+    private static boolean followRightWall = true;
 
-    public static void addToPFS(Direction dir) {
-        pathfindStack[stackCount] = dir;
-        stackCount++;
-    }
-
-    public static void popFromPFS() {
-        stackCount--;
-    }
-
-    private static void popAll() {
-        stackCount = 0;
-    }
-
-    private static Direction topPathfindDir() {
-        if (stackCount > 0) return pathfindStack[stackCount - 1];
-        else return null;
-    }
-
-    // public static void smartMove(RobotController rc, MapLocation targetLocation) throws GameActionException {
-    //     boolean fullstack = true;
-    //     Direction dir1 = rc.getLocation().directionTo(targetLocation);
-    //     while (fullstack) {
-    //         fullstack = false;
-    //         if (stackCount == 0) {
-    //             if (rc.canMove(dir1)) {
-    //                 rc.move(dir1);
-    //                 return;
-    //             }
-    //             else {
-    //                 addToPFS(dir1);
-    //             }
-    //         }
-    //         else {
-    //             if (rc.canMove(topPathfindDir())) {
-    //                 rc.move(topPathfindDir());
-    //                 popFromPFS();
-    //                 return;
-    //             }
-    //         }
-    //         Direction dirNow = topPathfindDir();
-    //         while(!rc.canMove(dirNow)) {
-    //             if (dirNow != topPathfindDir()) {
-    //                 addToPFS(dirNow);
-    //                 if (stackCount == 8) {
-    //                     fullstack = true;
-    //                     popAll();
-    //                     break;
-    //                 }
-    //             }
-    //             if (clockwiseRotation) dirNow = dirNow.rotateRight();
-    //             else dirNow = dirNow.rotateLeft();
-    //         }
-    //         if (!fullstack) {
-    //             rc.move(dirNow);
-    //         }
-    //     }
-    // }
-    // public static void smartMove(RobotController rc, MapLocation targetLocation) throws GameActionException {
-    //     Direction dir1 = rc.getLocation().directionTo(targetLocation);
-    //     int dir1Idx = 0;
-    //     for (int i = 0; i < directions.length;i++) {
-    //         if (dir1 == directions[i]) dir1Idx = i;
-    //     }
-    //     if (rc.canMove(dir1)) {
-    //         rc.move(dir1);
-    //     }
-    //     else {
-    //         int i = 1;
-    //         while (!rc.canMove(directions[Math.floorMod((dir1Idx + i), directions.length)])) {
-    //             if (i > 0) {
-    //                 i*= -1;
-    //             }
-    //             else {
-    //                 i = i* - 1 + 1;
-    //             }
-    //         }
-    //         rc.move(directions[Math.floorMod((dir1Idx + i), directions.length)]);
-    //     }
-    // }
     public static void smartMove(RobotController rc, MapLocation targetLocation) throws GameActionException {
-        Direction dir1 = rc.getLocation().directionTo(targetLocation);
-        if (huggingWall) {
-            bugNavigateTo(rc, targetLocation);
-        }
-        if (rc.canMove(dir1)) {
-            rc.move(dir1);
-        }
-        else {
-            if (rc.canMove(dir1.rotateLeft())) {
-                rc.move(dir1.rotateLeft());
-            }
-            else if (rc.canMove(dir1.rotateRight())) {
-                rc.move(dir1.rotateRight());
-            }
-            else {
-                bugNavigateTo(rc, targetLocation);
-            }
-        }
-    }
-
-    public static void bugNavigateTo(RobotController rc, MapLocation target) throws GameActionException {
-        if (!rc.isMovementReady() || target == null) return;
-        MapLocation myLoc = rc.getLocation();
-        if (myLoc.equals(target)) return;
-
-        // Auto-reset saat target berubah
-        if (bugTarget == null || !bugTarget.equals(target)) {
-            huggingWall = false;
-            bugTarget = target;
-        }
-
-        Direction dir = myLoc.directionTo(target);
-        if (rc.canMove(dir)) {
-            huggingWall = false;
-            rc.move(dir);
-        } else {
-            if (!huggingWall) {
-                huggingWall = true;
-                wallDir = dir;
-                bugStartDist = myLoc.distanceSquaredTo(target);
-            }
-            for (int i = 0; i < 8; i++) {
-                wallDir = wallDir.rotateRight();
-                if (rc.canMove(wallDir)) {
-                    rc.move(wallDir);
-                    break;
-                }
-            }
-            MapLocation newLoc = rc.getLocation();
-            Direction nd = newLoc.directionTo(target);
-            if (rc.canMove(nd) && newLoc.distanceSquaredTo(target) < bugStartDist) {
-                huggingWall = false;
+        Direction nextDir = getMoveDirection(rc, targetLocation);
+        if (nextDir != null) {
+            if (rc.canMove(nextDir)) {
+                rc.move(nextDir);
             }
         }
     }
@@ -179,5 +48,275 @@ public class RobotMovement {
         else {
             smartMove(rc, rc.getLocation().add(dirNow));
         }
+    }
+
+    public static Direction getMoveDirection(RobotController rc, MapLocation targetLocation) throws GameActionException {
+
+        if (!rc.isMovementReady()) return null;
+        if (targetLocation == null) return null;
+
+        MapLocation me = rc.getLocation();
+
+        if (me.equals(targetLocation)) return null;
+
+        if (lastTarget == null || !lastTarget.equals(targetLocation)) {
+            reset();
+            lastTarget = targetLocation;
+
+            followRightWall = (rc.getID() & 1) == 0;
+        }
+
+        Direction toTarget = me.directionTo(targetLocation);
+
+        Direction left = toTarget.rotateLeft();
+        Direction right = toTarget.rotateRight();
+
+        if (!tracing) {
+
+            Direction greedy = tryDirections(rc, toTarget, left, right);
+
+            if (greedy != null) {
+                traceHeading = greedy;
+                return greedy;
+            }
+
+            tracing = true;
+
+            if (toTarget == Direction.CENTER) {
+                traceHeading = Direction.NORTH;
+            }
+            else {
+                traceHeading = toTarget;
+            }
+        }
+
+        Direction exit = tryTraceExit(rc, toTarget);
+
+        if (exit != null) {
+
+            tracing = false;
+            traceHeading = exit;
+
+            return exit;
+        }
+
+        Direction trace = traceMove(rc, targetLocation);
+
+        if (trace != null) {
+            traceHeading = trace;
+        }
+
+        return trace;
+    }
+
+    public static boolean move(RobotController rc, Direction d) throws GameActionException {
+
+        if (d == null) return false;
+        if (!rc.isMovementReady()) return false;
+        if (!rc.canMove(d)) return false;
+
+        rc.move(d);
+
+        lastMove = d;
+
+        return true;
+    }
+
+    public static boolean moveTowards(RobotController rc, MapLocation targetLocation) throws GameActionException {
+
+        Direction d = getMoveDirection(rc, targetLocation);
+
+        return move(rc, d);
+    }
+
+    private static Direction tryDirections(RobotController rc, Direction... dirs) {
+
+        Direction fallback = null;
+
+        for (Direction d : dirs) {
+
+            if (!canStep(rc, d)) continue;
+
+            if (fallback == null) fallback = d;
+
+            if (!isReverse(d)) {
+                return d;
+            }
+        }
+
+        return fallback;
+    }
+
+    private static Direction tryTraceExit(RobotController rc, Direction targetDir) {
+
+        Direction tracingDir;
+        if (traceHeading == Direction.CENTER) {
+            if (followRightWall) {
+                tracingDir = targetDir.rotateRight();
+            }
+            else {
+                tracingDir = targetDir.rotateLeft();
+            }
+        }
+        else {
+            tracingDir = traceHeading;
+        }
+
+        Direction mid = midpoint(targetDir, tracingDir);
+
+        if (mid != Direction.CENTER && canStep(rc, mid)) {
+            return mid;
+        }
+
+        return null;
+    }
+
+    private static Direction midpoint(Direction from, Direction to) {
+
+        int cw = clockwiseSteps(from, to);
+        int ccw = 8 - cw;
+
+        int steps;
+        boolean rotateRight;
+
+        if (cw <= ccw) {
+
+            steps = cw / 2;
+            rotateRight = true;
+
+        } else {
+
+            steps = ccw / 2;
+            rotateRight = false;
+        }
+
+        Direction d = from;
+
+        for (int i = 0; i < steps; i++) {
+            if (rotateRight) {
+                d = d.rotateRight();
+            }
+            else {
+                d = d.rotateLeft();
+            }
+        }
+
+        return d;
+    }
+
+    private static Direction traceMove(RobotController rc, MapLocation targetLocation) throws GameActionException {
+
+        MapLocation me = rc.getLocation();
+
+        int curDist = me.distanceSquaredTo(targetLocation);
+
+        Direction heading;
+        if (traceHeading == Direction.CENTER) {
+            heading = Direction.NORTH;
+        }
+        else {
+            heading = traceHeading;
+        }
+
+        Direction d;
+        if (followRightWall) {
+            d = heading.rotateRight();
+        }
+        else {
+            d = heading.rotateLeft();
+        }
+
+        Direction best = null;
+        int bestScore = Integer.MIN_VALUE;
+
+        for (int i = 0; i < 8; i++) {
+
+            if (canStep(rc, d)) {
+
+                MapLocation next = me.add(d);
+
+                int score = 0;
+
+                int nextDist = next.distanceSquaredTo(targetLocation);
+
+                score += (curDist - nextDist) * 12;
+
+                score -= i * 5;
+
+                MapLocation side;
+                if (followRightWall) {
+                    side = next.add(d.rotateRight());
+                }
+                else {
+                    side = next.add(d.rotateLeft());
+                }
+                
+
+                if (isWallLike(rc, side)) {
+                    score += 10;
+                }
+
+                if (isReverse(d)) {
+                    score -= 15;
+                }
+
+                if (score > bestScore) {
+
+                    bestScore = score;
+                    best = d;
+                }
+            }
+
+            if (followRightWall) {
+                d = heading.rotateRight();
+            }
+            else {
+                d = heading.rotateLeft();
+            }
+        }
+
+        return best;
+    }
+
+    private static boolean canStep(RobotController rc, Direction d) {
+
+        return d != null && d != Direction.CENTER && rc.canMove(d);
+    }
+
+    private static boolean isWallLike(RobotController rc, MapLocation loc) throws GameActionException {
+
+        if (!rc.canSenseLocation(loc)) return true;
+
+        return rc.senseMapInfo(loc).isWall();
+    }
+
+    private static int clockwiseSteps(Direction from, Direction to) {
+
+        Direction d = from;
+
+        for (int i = 0; i < 8; i++) {
+
+            if (d == to) return i;
+
+            d = d.rotateRight();
+        }
+
+        return 0;
+    }
+
+    private static boolean isReverse(Direction d) {
+
+        return lastMove != null
+                && lastMove != Direction.CENTER
+                && d == lastMove.opposite();
+    }
+
+    private static void reset() {
+
+        tracing = false;
+
+        traceHeading = Direction.CENTER;
+
+        lastMove = Direction.CENTER;
     }
 }
