@@ -20,6 +20,11 @@ public class RobotMovement {
 
     static int stackCount = 0;
 
+    private static boolean huggingWall = false;
+    private static Direction wallDir = null;
+    private static int bugStartDist = 0;
+    private static MapLocation bugTarget = null;
+
     public static void addToPFS(Direction dir) {
         pathfindStack[stackCount] = dir;
         stackCount++;
@@ -77,29 +82,84 @@ public class RobotMovement {
     //         }
     //     }
     // }
+    // public static void smartMove(RobotController rc, MapLocation targetLocation) throws GameActionException {
+    //     Direction dir1 = rc.getLocation().directionTo(targetLocation);
+    //     int dir1Idx = 0;
+    //     for (int i = 0; i < directions.length;i++) {
+    //         if (dir1 == directions[i]) dir1Idx = i;
+    //     }
+    //     if (rc.canMove(dir1)) {
+    //         rc.move(dir1);
+    //     }
+    //     else {
+    //         int i = 1;
+    //         while (!rc.canMove(directions[Math.floorMod((dir1Idx + i), directions.length)])) {
+    //             if (i > 0) {
+    //                 i*= -1;
+    //             }
+    //             else {
+    //                 i = i* - 1 + 1;
+    //             }
+    //         }
+    //         rc.move(directions[Math.floorMod((dir1Idx + i), directions.length)]);
+    //     }
+    // }
     public static void smartMove(RobotController rc, MapLocation targetLocation) throws GameActionException {
         Direction dir1 = rc.getLocation().directionTo(targetLocation);
-        int dir1Idx = 0;
-        for (int i = 0; i < directions.length;i++) {
-            if (dir1 == directions[i]) dir1Idx = i;
+        if (huggingWall) {
+            bugNavigateTo(rc, targetLocation);
         }
         if (rc.canMove(dir1)) {
             rc.move(dir1);
         }
         else {
-            int i = 1;
-            while (!rc.canMove(directions[Math.floorMod((dir1Idx + i), directions.length)])) {
-                if (i > 0) {
-                    i*= -1;
-                }
-                else {
-                    i = i* - 1 + 1;
-                }
+            if (rc.canMove(dir1.rotateLeft())) {
+                rc.move(dir1.rotateLeft());
             }
-            rc.move(directions[Math.floorMod((dir1Idx + i), directions.length)]);
+            else if (rc.canMove(dir1.rotateRight())) {
+                rc.move(dir1.rotateRight());
+            }
+            else {
+                bugNavigateTo(rc, targetLocation);
+            }
         }
     }
 
+    public static void bugNavigateTo(RobotController rc, MapLocation target) throws GameActionException {
+        if (!rc.isMovementReady() || target == null) return;
+        MapLocation myLoc = rc.getLocation();
+        if (myLoc.equals(target)) return;
+
+        // Auto-reset saat target berubah
+        if (bugTarget == null || !bugTarget.equals(target)) {
+            huggingWall = false;
+            bugTarget = target;
+        }
+
+        Direction dir = myLoc.directionTo(target);
+        if (rc.canMove(dir)) {
+            huggingWall = false;
+            rc.move(dir);
+        } else {
+            if (!huggingWall) {
+                huggingWall = true;
+                wallDir = dir;
+                bugStartDist = myLoc.distanceSquaredTo(target);
+            }
+            for (int i = 0; i < 8; i++) {
+                wallDir = wallDir.rotateRight();
+                if (rc.canMove(wallDir)) {
+                    rc.move(wallDir);
+                    break;
+                }
+            }
+            MapLocation newLoc = rc.getLocation();
+            Direction nd = newLoc.directionTo(target);
+            if (rc.canMove(nd) && newLoc.distanceSquaredTo(target) < bugStartDist) {
+                huggingWall = false;
+            }
+        }
+    }
 
     public static void mopperMove(RobotController rc, MapLocation targetLocation) throws GameActionException {
         Direction dir1 = rc.getLocation().directionTo(targetLocation);
