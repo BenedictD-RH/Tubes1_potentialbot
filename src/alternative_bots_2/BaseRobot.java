@@ -71,7 +71,7 @@ public class BaseRobot {
 
     
     public static final int LOW_PAINT_PERCENT = 20;   
-    public static final int REFILL_PAINT_PERCENT = 30; 
+    public static final int REFILL_PAINT_PERCENT = 90;
     public static final int MIN_CHIPS_TOWER = 1000;    
     public static final int MIN_CHIPS_SPAWN = 300;     
 

@@ -8,7 +8,6 @@ import battlecode.common.MapInfo;
 import battlecode.common.MapLocation;
 import battlecode.common.PaintType;
 import battlecode.common.RobotInfo;
-import battlecode.common.UnitType;
 
 
 public class Splasher extends Unit {
@@ -23,29 +22,20 @@ public class Splasher extends Unit {
     private static MapLocation splashTarget = null;  
     private static MapLocation enemyTowerTarget = null;
 
-    
-    private static final int MIN_SPLASH_SCORE = 3;
+    private static final int MIN_SPLASH_SCORE = 1;
 
+    // Fungsi menjalankan
     public static void run() throws GameActionException {
         initUnit();
         scanEnvironment();
         processMessages();
-
-        
         updateState();
-
-        
         executeState();
     }
 
-    
-    
-    
-
+    // Fungsi memilih state
     private static void updateState() throws GameActionException {
         int paintPercent = (rc.getPaint() * 100) / rc.getType().paintCapacity;
-
-        
         if (paintPercent <= 25) {
             state = STATE_REFILL;
             return;
@@ -53,8 +43,6 @@ public class Splasher extends Unit {
         if (state == STATE_REFILL && paintPercent > 75) {
             state = STATE_EXPLORE;
         }
-
-        
         RobotInfo[] enemies = rc.senseNearbyRobots(-1, rc.getTeam().opponent());
         RobotInfo enemyTower = findEnemyTower(enemies);
         if (enemyTower != null) {
@@ -63,7 +51,6 @@ public class Splasher extends Unit {
             return;
         }
 
-        
         MapLocation bestOverwrite = findBestSplashTarget(true);
         if (bestOverwrite != null) {
             splashTarget = bestOverwrite;
@@ -71,7 +58,6 @@ public class Splasher extends Unit {
             return;
         }
 
-        
         MapLocation bestPaint = findBestSplashTarget(false);
         if (bestPaint != null) {
             splashTarget = bestPaint;
@@ -79,14 +65,10 @@ public class Splasher extends Unit {
             return;
         }
 
-        
         state = STATE_EXPLORE;
     }
-
     
-    
-    
-
+    // Fungsi menjalankan state
     private static void executeState() throws GameActionException {
         switch (state) {
             case STATE_ATTACK_TOWER:
@@ -106,17 +88,13 @@ public class Splasher extends Unit {
         }
     }
 
-    
-    
-    
-
+    // Fungsi menjalankan state ATTACK_TOWER
     private static void executeAttackTower() throws GameActionException {
         if (enemyTowerTarget == null) {
             state = STATE_EXPLORE;
             return;
         }
 
-        
         if (rc.canSenseLocation(enemyTowerTarget)) {
             if (!rc.canSenseRobotAtLocation(enemyTowerTarget)) {
                 enemyTowerTarget = null;
@@ -126,51 +104,34 @@ public class Splasher extends Unit {
         }
 
         MapLocation myLoc = rc.getLocation();
-
-        
-        
         if (rc.isActionReady() && rc.canAttack(enemyTowerTarget)) {
             rc.attack(enemyTowerTarget);
             broadcastEnemyTower(enemyTowerTarget);
             return;
         }
-
-        
         if (rc.isMovementReady()) {
-            
-            
             int dist = myLoc.distanceSquaredTo(enemyTowerTarget);
             if (dist > 4) {
                 moveGreedy(enemyTowerTarget);
             } else if (dist <= 2) {
-                
                 retreatFrom(enemyTowerTarget);
             }
         }
     }
-
-    
-    
-    
-
+    // Fungsi menjalankan state AREA_PAINT
     private static void executeAreaSplash() throws GameActionException {
         if (splashTarget == null) {
             state = STATE_EXPLORE;
             return;
         }
-
         MapLocation myLoc = rc.getLocation();
-
-        
         if (rc.isActionReady() && rc.canAttack(splashTarget)) {
             rc.attack(splashTarget);
-            
             splashTarget = findBestSplashTarget(state == STATE_OVERWRITE);
             if (splashTarget == null) state = STATE_EXPLORE;
             return;
         }
 
-        
         if (rc.isMovementReady()) {
             int dist = myLoc.distanceSquaredTo(splashTarget);
             if (dist <= 4) {
@@ -181,20 +142,20 @@ public class Splasher extends Unit {
             }
         }
     }
-
-    
-    
-    
-
+    // Fungsi menjalankan state EXPLORE
     private static void executeExplore() throws GameActionException {
-        
         RobotInfo[] enemies = rc.senseNearbyRobots(-1, rc.getTeam().opponent());
         if (enemies.length > 0) {
             broadcastEnemyLocation(enemies[0].getLocation());
         }
-
+        if (rc.isActionReady()) {
+            MapLocation opp = findBestSplashTarget(false);
+            if (opp != null && rc.canAttack(opp)) {
+                rc.attack(opp);
+                return;
+            }
+        }
         if (rc.isMovementReady()) {
-            
             MapLocation towerLoc = readBroadcastTarget(MSG_ENEMY_TOWER);
             if (towerLoc != null) {
                 enemyTowerTarget = towerLoc;
@@ -202,8 +163,6 @@ public class Splasher extends Unit {
                 moveGreedy(towerLoc);
                 return;
             }
-
-            
             MapLocation enemyLoc = readBroadcastTarget(MSG_ENEMY_LOC);
             if (enemyLoc != null) {
                 splashTarget = enemyLoc;
@@ -211,8 +170,7 @@ public class Splasher extends Unit {
                 moveGreedy(enemyLoc);
                 return;
             }
-
-            
+            // Bergerak ke area yang belum di-paint 
             MapLocation unpaintedArea = findUnpaintedArea();
             if (unpaintedArea != null) {
                 moveGreedy(unpaintedArea);
@@ -221,34 +179,21 @@ public class Splasher extends Unit {
             }
         }
     }
-
-    
-    
-    
-
-    
+    // Fungsi mencari rute terbaik splash
     private static MapLocation findBestSplashTarget(boolean preferEnemy) throws GameActionException {
-        
         if (Clock.getBytecodesLeft() < 2000) return null;
-
         MapLocation myLoc = rc.getLocation();
         MapInfo[] nearbyTiles = rc.senseNearbyMapInfos(-1);
-
         MapLocation bestLoc = null;
         int bestScore = MIN_SPLASH_SCORE - 1; 
 
         for (MapInfo tile : nearbyTiles) {
             if (!tile.isPassable()) continue;
             MapLocation loc = tile.getMapLocation();
-
-            
             if (myLoc.distanceSquaredTo(loc) > 4) continue;
             if (!rc.canAttack(loc)) continue;
-
             if (Clock.getBytecodesLeft() < 1000) break; 
-
             int score = evaluateSplashScore(loc, preferEnemy);
-
             if (score > bestScore) {
                 bestScore = score;
                 bestLoc = loc;
@@ -258,18 +203,14 @@ public class Splasher extends Unit {
         return bestLoc;
     }
 
-    
+    // Fungsi evaluasi rute splash
     private static int evaluateSplashScore(MapLocation center, boolean preferEnemy)
             throws GameActionException {
         int score = 0;
-
         MapInfo[] splashArea = rc.senseNearbyMapInfos(center, 2);
         for (MapInfo t : splashArea) {
             if (!t.isPassable()) continue;
-
             PaintType paint = t.getPaint();
-
-            
             if (rc.canSenseRobotAtLocation(t.getMapLocation())) {
                 RobotInfo robot = rc.senseRobotAtLocation(t.getMapLocation());
                 if (robot != null && robot.getTeam() != rc.getTeam()) {
@@ -281,26 +222,19 @@ public class Splasher extends Unit {
                     continue;
                 }
             }
-
             if (!paint.isAlly()) {
                 if (paint == PaintType.EMPTY) {
                     score += 1; 
                 } else {
-                    
                     score += preferEnemy ? 4 : 2; 
                 }
             }
             
         }
-
         return score;
     }
 
-    
-    
-    
-
-    
+    // Fungsi mencari tower musuh terkecil
     private static RobotInfo findEnemyTower(RobotInfo[] enemies) {
         RobotInfo best = null;
         int minHP = Integer.MAX_VALUE;
@@ -322,7 +256,6 @@ public class Splasher extends Unit {
         if (awayDir != null && rc.canMove(awayDir)) {
             rc.move(awayDir);
         } else {
-            
             for (Direction dir : directions) {
                 MapLocation next = myLoc.add(dir);
                 if (rc.canMove(dir) && next.distanceSquaredTo(target) > myLoc.distanceSquaredTo(target)) {
@@ -336,10 +269,7 @@ public class Splasher extends Unit {
 
     
     private static void moveTowardForSplash(MapLocation target) throws GameActionException {
-        
         if (rc.canAttack(target)) return;
-
-        
         moveGreedy(target);
     }
 

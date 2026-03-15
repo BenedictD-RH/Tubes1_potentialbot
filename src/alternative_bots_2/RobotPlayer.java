@@ -1,11 +1,11 @@
 package alternative_bots_2;
 
-import alternative_bots_2.Units.Mopper;
-import alternative_bots_2.Units.Soldier;
-import alternative_bots_2.Units.Splasher;
 import battlecode.common.Clock;
 import battlecode.common.GameActionException;
 import battlecode.common.RobotController;
+import alternative_bots_2.Units.Mopper;
+import alternative_bots_2.Units.Soldier;
+import alternative_bots_2.Units.Splasher;
 
 public class RobotPlayer {
 

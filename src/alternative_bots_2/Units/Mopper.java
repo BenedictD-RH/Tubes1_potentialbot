@@ -7,361 +7,198 @@ import battlecode.common.MapInfo;
 import battlecode.common.MapLocation;
 import battlecode.common.PaintType;
 import battlecode.common.RobotInfo;
-import battlecode.common.UnitType;
-
 
 public class Mopper extends Unit {
-
-    private static final int STATE_MOP_RUIN  = 0;
-    private static final int STATE_COMBAT    = 1;
-    private static final int STATE_TRANSFER  = 2;
-    private static final int STATE_MOP_AREA  = 3;
-    private static final int STATE_REFILL    = 4;
-    private static final int STATE_EXPLORE   = 5;
-
-    private static int state = STATE_EXPLORE;
-    private static MapLocation mopTarget = null;   
-    private static MapLocation combatTarget = null; 
+    private static final int MOPPER_REFILL_PCT = 30;
+    private static MapLocation moveTarget = null;
 
     public static void run() throws GameActionException {
         initUnit();
         scanEnvironment();
         processMessages();
 
-        
-        updateState();
-
-        
-        executeState();
-    }
-
-    
-    
-    
-
-    private static void updateState() throws GameActionException {
-        int paintPercent = (rc.getPaint() * 100) / rc.getType().paintCapacity;
-
-        
-        if (paintPercent <= LOW_PAINT_PERCENT) {
-            state = STATE_REFILL;
-            return;
-        }
-        if (state == STATE_REFILL && paintPercent > 80) {
-            state = STATE_EXPLORE;
-        }
-
-        RobotInfo[] enemies = rc.senseNearbyRobots(-1, rc.getTeam().opponent());
-        RobotInfo[] allies  = rc.senseNearbyRobots(-1, rc.getTeam());
-
-        
-        RobotInfo dyingAlly = findDyingAlly(allies);
-        if (dyingAlly != null && paintPercent > 40) {
-            state = STATE_TRANSFER;
-            return;
-        }
-
-        
-        MapLocation ruinWithEnemyPaint = findRuinWithEnemyPaint();
-        if (ruinWithEnemyPaint != null) {
-            mopTarget = ruinWithEnemyPaint;
-            state = STATE_MOP_RUIN;
-            
-            broadcastRuin(ruinWithEnemyPaint);
-            return;
-        }
-
-        
-        if (enemies.length > 0) {
-            combatTarget = selectCombatTarget(enemies);
-            if (combatTarget != null) {
-                state = STATE_COMBAT;
-                return;
+        // Membersihkan area musuh
+        if (rc.isActionReady()) {
+            if (!tryMopSwing()) {
+                tryAttackTarget();
             }
         }
 
-        
-        MapLocation enemyPaint = findNearestEnemyPaint();
-        if (enemyPaint != null) {
-            mopTarget = enemyPaint;
-            state = STATE_MOP_AREA;
+        // transfer paint ke teman yang kritis
+        if (rc.isActionReady()) {
+            tryTransferPaint();
+        }
+
+        // refill paint
+        int pct = (rc.getPaint() * 100) / rc.getType().paintCapacity;
+        if (pct <= MOPPER_REFILL_PCT) {
+            if (rc.isMovementReady()) refillPaint();
             return;
         }
 
-        
-        if (state != STATE_TRANSFER && state != STATE_MOP_RUIN) {
-            state = STATE_EXPLORE;
-        }
-    }
-
-    
-    
-    
-
-    private static void executeState() throws GameActionException {
-        switch (state) {
-            case STATE_MOP_RUIN:
-                executeMopRuin();
-                break;
-            case STATE_COMBAT:
-                executeCombat();
-                break;
-            case STATE_TRANSFER:
-                executeTransfer();
-                break;
-            case STATE_MOP_AREA:
-                executeMopArea();
-                break;
-            case STATE_REFILL:
-                refillPaint();
-                break;
-            case STATE_EXPLORE:
-            default:
-                executeExplore();
-                break;
-        }
-    }
-
-    
-    
-    
-
-    private static void executeMopRuin() throws GameActionException {
-        if (mopTarget == null) {
-            state = STATE_EXPLORE;
-            return;
-        }
-
-        MapLocation myLoc = rc.getLocation();
-        int dist = myLoc.distanceSquaredTo(mopTarget);
-
-        
-        if (dist <= 2) {
-            if (rc.isActionReady() && rc.canAttack(mopTarget)) {
-                rc.attack(mopTarget);
-
-                
-                mopTarget = findRuinWithEnemyPaint();
-                if (mopTarget == null) {
-                    state = STATE_EXPLORE;
-                }
-            }
-        } else {
-            
-            if (rc.isMovementReady()) {
-                moveGreedy(mopTarget);
-            }
-        }
-    }
-
-    
-    
-    
-
-    private static void executeCombat() throws GameActionException {
-        if (combatTarget == null) {
-            state = STATE_EXPLORE;
-            return;
-        }
-
-        MapLocation myLoc = rc.getLocation();
-        int dist = myLoc.distanceSquaredTo(combatTarget);
-
-        
-        RobotInfo[] enemies = rc.senseNearbyRobots(-1, rc.getTeam().opponent());
-        boolean targetStillExists = false;
-        for (RobotInfo e : enemies) {
-            if (e.getLocation().equals(combatTarget)) {
-                targetStillExists = true;
-                break;
-            }
-        }
-
-        if (!targetStillExists) {
-            
-            if (enemies.length > 0) {
-                combatTarget = selectCombatTarget(enemies);
+        // bergerak 
+        if (rc.isMovementReady()) {
+            updateMoveTarget();
+            if (moveTarget != null) {
+                moveGreedy(moveTarget);
             } else {
-                combatTarget = null;
-                state = STATE_EXPLORE;
-                return;
+                explore();
             }
-        }
-
-        
-        if (rc.isActionReady() && enemies.length >= 2) {
-            Direction swingDir = findBestSwingDirection(enemies);
-            if (swingDir != null && rc.canMopSwing(swingDir)) {
-                rc.mopSwing(swingDir);
-                return;
-            }
-        }
-
-        
-        if (dist <= 2) {
-            if (rc.isActionReady() && rc.canAttack(combatTarget)) {
-                rc.attack(combatTarget);
-                return;
-            }
-        }
-
-        
-        if (rc.isMovementReady()) {
-            moveGreedy(combatTarget);
         }
     }
 
-    
-    
-    
+    // Fungsi Membersihkan
+    private static boolean tryMopSwing() throws GameActionException {
+        RobotInfo[] enemies = rc.senseNearbyRobots(2, rc.getTeam().opponent());
+        if (enemies.length < 2) return false;
 
-    private static void executeTransfer() throws GameActionException {
-        RobotInfo[] allies = rc.senseNearbyRobots(-1, rc.getTeam());
-        RobotInfo dyingAlly = findDyingAlly(allies);
+        Direction bestDir = null;
+        int maxHits = 0;
+        MapLocation myLoc = rc.getLocation();
 
-        if (dyingAlly == null) {
-            state = STATE_EXPLORE;
-            return;
-        }
+        for (Direction dir : cardinalDirs) {
+            if (!rc.canMopSwing(dir)) continue;
 
-        MapLocation allyLoc = dyingAlly.getLocation();
-        int dist = rc.getLocation().distanceSquaredTo(allyLoc);
+            int hits = 0;
+            MapLocation p1 = myLoc.add(dir);
+            MapLocation p2 = p1.add(dir);
 
-        if (dist <= 2) {
-            
-            if (rc.isActionReady()) {
-                int allyNeed = dyingAlly.getType().paintCapacity / 2 - dyingAlly.getPaintAmount();
-                int canGive  = rc.getPaint() - rc.getType().paintCapacity / 4; 
-                int amount   = Math.min(allyNeed, canGive);
-
-                if (amount > 0 && rc.canTransferPaint(allyLoc, amount)) {
-                    rc.transferPaint(allyLoc, amount);
+            for (RobotInfo e : enemies) {
+                MapLocation eLoc = e.getLocation();
+                if (eLoc.distanceSquaredTo(p1) <= 1 || eLoc.distanceSquaredTo(p2) <= 1) {
+                    hits++;
                 }
             }
-            state = STATE_EXPLORE;
-        } else {
-            if (rc.isMovementReady()) {
-                moveGreedy(allyLoc);
+
+            if (hits > maxHits) {
+                maxHits = hits;
+                bestDir = dir;
             }
         }
+
+        if (bestDir != null && maxHits >= 2) {
+            rc.mopSwing(bestDir);
+            return true;
+        }
+        return false;
     }
 
-    
-    
-    
-
-    private static void executeMopArea() throws GameActionException {
-        if (mopTarget == null) {
-            state = STATE_EXPLORE;
-            return;
-        }
-
+    // Fungsi attack ke mush
+    private static boolean tryAttackTarget() throws GameActionException {
         MapLocation myLoc = rc.getLocation();
-        int dist = myLoc.distanceSquaredTo(mopTarget);
 
-        if (dist <= 2) {
-            if (rc.isActionReady() && rc.canAttack(mopTarget)) {
-                rc.attack(mopTarget);
-                
-                mopTarget = findNearestEnemyPaint();
-                if (mopTarget == null) state = STATE_EXPLORE;
-            }
-        } else {
-            if (rc.isMovementReady()) {
-                moveGreedy(mopTarget);
-            }
-        }
-    }
-
-    
-    
-    
-
-    private static void executeExplore() throws GameActionException {
-        RobotInfo[] enemies = rc.senseNearbyRobots(-1, rc.getTeam().opponent());
-        if (enemies.length > 0) {
-            broadcastEnemyLocation(enemies[0].getLocation());
-        }
-
-        if (rc.isMovementReady()) {
-            
-            MapLocation mopReq = readBroadcastTarget(MSG_MOPPER_REQ);
-            if (mopReq != null) {
-                mopTarget = mopReq;
-                state = STATE_MOP_AREA;
-                moveGreedy(mopReq);
-                return;
-            }
-
-            
-            MapLocation enemyLoc = readBroadcastTarget(MSG_ENEMY_LOC);
-            if (enemyLoc != null) {
-                moveGreedy(enemyLoc);
-                return;
-            }
-
-            explore();
-        }
-    }
-
-    
-    
-    
-
-    
-    private static RobotInfo findDyingAlly(RobotInfo[] allies) {
-        RobotInfo worst = null;
+        // Robot musuh non-tower dengan paint paling sedikit
+        RobotInfo[] enemies = rc.senseNearbyRobots(2, rc.getTeam().opponent());
+        RobotInfo weakest = null;
         int minPaint = Integer.MAX_VALUE;
 
-        for (RobotInfo ally : allies) {
-            
-            if (isTowerType(ally.getType())) continue;
-
-            int paintPercent = (ally.getPaintAmount() * 100);
-            if (ally.getType().paintCapacity > 0) {
-                paintPercent /= ally.getType().paintCapacity;
-            }
-
-            
-            if (paintPercent < 20 && ally.getPaintAmount() < minPaint) {
-                minPaint = ally.getPaintAmount();
-                worst = ally;
+        for (RobotInfo e : enemies) {
+            if (!isTowerType(e.getType()) && e.getPaintAmount() < minPaint) {
+                minPaint = e.getPaintAmount();
+                weakest = e;
             }
         }
-        return worst;
-    }
+        if (weakest != null && rc.canAttack(weakest.getLocation())) {
+            rc.attack(weakest.getLocation());
+            return true;
+        }
 
-    
-    private static MapLocation findRuinWithEnemyPaint() throws GameActionException {
-        MapInfo[] tiles = rc.senseNearbyMapInfos(-1);
-        MapLocation myLoc = rc.getLocation();
-        MapLocation best = null;
+        // Tile dengan paint musuh terdekat dalam attack radius
+        MapInfo[] tiles = rc.senseNearbyMapInfos(2);
+        MapLocation bestTile = null;
         int minDist = Integer.MAX_VALUE;
 
         for (MapInfo tile : tiles) {
-            if (!tile.hasRuin()) continue;
-            MapLocation ruinLoc = tile.getMapLocation();
-
-            
-            MapInfo[] ruinArea = rc.senseNearbyMapInfos(ruinLoc, 8);
-            for (MapInfo ruinTile : ruinArea) {
-                if (!ruinTile.getPaint().isAlly() &&
-                    ruinTile.getPaint() != PaintType.EMPTY &&
-                    ruinTile.isPassable()) {
-                    
-                    int dist = myLoc.distanceSquaredTo(ruinTile.getMapLocation());
-                    if (dist < minDist) {
-                        minDist = dist;
-                        best = ruinTile.getMapLocation();
-                    }
-                    break;
+            if (!tile.isPassable()) continue;
+            PaintType paint = tile.getPaint();
+            if (!paint.isAlly() && paint != PaintType.EMPTY) {
+                MapLocation loc = tile.getMapLocation();
+                int d = myLoc.distanceSquaredTo(loc);
+                if (d < minDist && rc.canAttack(loc)) {
+                    minDist = d;
+                    bestTile = loc;
                 }
             }
         }
-        return best;
+        if (bestTile != null) {
+            rc.attack(bestTile);
+            return true;
+        }
+
+        return false;
     }
 
-    
+    // Fungsi transfer paint ke teman yang kritis
+    private static boolean tryTransferPaint() throws GameActionException {
+        int myPct = (rc.getPaint() * 100) / rc.getType().paintCapacity;
+        if (myPct < 50) return false;
+
+        RobotInfo[] allies = rc.senseNearbyRobots(2, rc.getTeam());
+        for (RobotInfo ally : allies) {
+            if (isTowerType(ally.getType())) continue;
+            if (ally.getType().paintCapacity == 0) continue;
+
+            int allyPct = (ally.getPaintAmount() * 100) / ally.getType().paintCapacity;
+            if (allyPct < 20) {
+                int give = rc.getPaint() / 4;
+                if (give > 0 && rc.canTransferPaint(ally.getLocation(), give)) {
+                    rc.transferPaint(ally.getLocation(), give);
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // Fungsi bergeak
+    private static void updateMoveTarget() throws GameActionException {
+        // Paint musuh terdekat
+        MapLocation enemyPaint = findNearestEnemyPaint();
+        if (enemyPaint != null) {
+            moveTarget = enemyPaint;
+            return;
+        }
+
+        // Robot musuh non-tower terlemah dalam sensor
+        RobotInfo[] enemies = rc.senseNearbyRobots(-1, rc.getTeam().opponent());
+        RobotInfo weakest = null;
+        int minPaint = Integer.MAX_VALUE;
+        for (RobotInfo e : enemies) {
+            if (!isTowerType(e.getType()) && e.getPaintAmount() < minPaint) {
+                minPaint = e.getPaintAmount();
+                weakest = e;
+            }
+        }
+        if (weakest != null) {
+            moveTarget = weakest.getLocation();
+            return;
+        }
+
+        // Broadcast (ada ruin butuh dibersihkan)
+        MapLocation mopReq = readBroadcastTarget(MSG_MOPPER_REQ);
+        if (mopReq != null) {
+            moveTarget = mopReq;
+            return;
+        }
+
+        //  Broadcast ( lokasi musuh umum )
+        MapLocation enemyLoc = readBroadcastTarget(MSG_ENEMY_LOC);
+        if (enemyLoc != null) {
+            moveTarget = enemyLoc;
+            return;
+        }
+
+        // Last known enemy
+        if (lastKnownEnemyLoc != null && rc.getRoundNum() - lastKnownEnemyRound < 100) {
+            moveTarget = lastKnownEnemyLoc;
+            return;
+        }
+
+        // Tidak ada target
+        moveTarget = null;
+    }
+
+    // Fungsi cari paint musuh terdekat
     private static MapLocation findNearestEnemyPaint() throws GameActionException {
         MapInfo[] tiles = rc.senseNearbyMapInfos(-1);
         MapLocation myLoc = rc.getLocation();
@@ -380,60 +217,5 @@ public class Mopper extends Unit {
             }
         }
         return best;
-    }
-
-    
-    private static MapLocation selectCombatTarget(RobotInfo[] enemies) {
-        RobotInfo best = null;
-        int minPaint = Integer.MAX_VALUE;
-
-        for (RobotInfo enemy : enemies) {
-            if (isTowerType(enemy.getType())) continue; 
-            if (enemy.getPaintAmount() < minPaint) {
-                minPaint = enemy.getPaintAmount();
-                best = enemy;
-            }
-        }
-
-        
-        if (best == null && enemies.length > 0) {
-            best = enemies[0];
-        }
-        return best != null ? best.getLocation() : null;
-    }
-
-    
-    private static Direction findBestSwingDirection(RobotInfo[] enemies) throws GameActionException {
-        Direction bestDir = null;
-        int maxHits = 0;
-
-        for (Direction dir : cardinalDirs) {
-            if (!rc.canMopSwing(dir)) continue;
-
-            
-            
-            MapLocation myLoc = rc.getLocation();
-            int hits = 0;
-
-            MapLocation step1 = myLoc.add(dir);
-            MapLocation step2 = step1.add(dir);
-
-            for (RobotInfo enemy : enemies) {
-                MapLocation eLoc = enemy.getLocation();
-                
-                if (eLoc.distanceSquaredTo(step1) <= 1 ||
-                    eLoc.distanceSquaredTo(step2) <= 1) {
-                    hits++;
-                }
-            }
-
-            if (hits > maxHits) {
-                maxHits = hits;
-                bestDir = dir;
-            }
-        }
-
-        
-        return (maxHits >= 2) ? bestDir : null;
     }
 }

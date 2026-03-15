@@ -11,8 +11,7 @@ import battlecode.common.UnitType;
 
 
 public class Soldier extends Unit {
-
-    
+   
     private static final int STATE_EXPLORE     = 0;  
     private static final int STATE_GOTO_RUIN   = 1;  
     private static final int STATE_BUILD_TOWER = 2;  
@@ -21,8 +20,7 @@ public class Soldier extends Unit {
     private static final int STATE_COMBAT      = 5;  
 
     private static int state = STATE_EXPLORE;
-
-    
+ 
     private static MapLocation ruinTarget   = null;  
     private static MapLocation paintTarget  = null;  
     private static MapLocation expandTarget = null;
@@ -30,7 +28,7 @@ public class Soldier extends Unit {
 
     
     private static MapLocation lastPos  = null;
-    private static int         posCount = 0;
+    private static int posCount = 0;
 
     
     private static boolean patternMarked = false;
@@ -39,6 +37,7 @@ public class Soldier extends Unit {
     private static final int REFILL_WHILE_BUILDING = 40;  
     private static final int REFILL_WHILE_EXPLORE  = 25;  
 
+    // Fungsi menjalankan
     public static void run() throws GameActionException {
         initUnit();
         scanEnvironment();
@@ -49,25 +48,13 @@ public class Soldier extends Unit {
         executeState();
     }
 
-    
-    
-    
-
+    // Fungsi memilih state
     private static void selectState() throws GameActionException {
         int paint    = rc.getPaint();
         int capacity = rc.getType().paintCapacity;
         int pct      = (paint * 100) / capacity;
         int chips    = rc.getMoney();
         int towers   = rc.getNumberTowers();
-
-        
-        
-        
-
-        
-        
-        
-        
         int refillThreshold = (state == STATE_BUILD_TOWER || state == STATE_GOTO_RUIN)
                             ? REFILL_WHILE_BUILDING : REFILL_WHILE_EXPLORE;
 
@@ -78,7 +65,6 @@ public class Soldier extends Unit {
             state = STATE_REFILL;
             return;
         }
-
         
         if (state == STATE_REFILL && pct > 70) {
             if (returnLocation != null) {
@@ -90,9 +76,6 @@ public class Soldier extends Unit {
                 state = STATE_EXPLORE;
             }
         }
-
-        
-        
         
         if (state == STATE_BUILD_TOWER || state == STATE_GOTO_RUIN) {
             
@@ -109,9 +92,6 @@ public class Soldier extends Unit {
             
             return;
         }
-
-        
-        
         
         MapLocation nearRuin = findNearbyEmptyRuin();
         if (nearRuin != null && chips >= chipsRequired(towers)) {
@@ -119,23 +99,18 @@ public class Soldier extends Unit {
             patternMarked = false;
             paintTarget   = null;
             state = STATE_BUILD_TOWER;
+            // Broadcast ruin 
+            broadcastRuin(nearRuin);
             return;
         }
-
-        
-        
-        
-        MapLocation memRuin = findNearestKnownRuin();
-        if (memRuin != null) {
+        MapLocation memRuin = findAssignedRuin();
+        if (memRuin != null && chips >= chipsRequired(towers)) {
             ruinTarget    = memRuin;
             patternMarked = false;
             paintTarget   = null;
             state = STATE_GOTO_RUIN;
             return;
         }
-
-        
-        
         
         if (towers >= 4 && pct > 50) {
             RobotInfo[] enemies = rc.senseNearbyRobots(-1, rc.getTeam().opponent());
@@ -147,23 +122,16 @@ public class Soldier extends Unit {
                 }
             }
         }
-
-        
-        
         
         if (towers >= 3 && pct > 50) {
             state = STATE_EXPAND;
             return;
         }
-
         
         state = STATE_EXPLORE;
     }
 
-    
-    
-    
-
+    // Fungsi menjalankan state
     private static void executeState() throws GameActionException {
         switch (state) {
             case STATE_BUILD_TOWER: executeBuildTower(); break;
@@ -175,24 +143,11 @@ public class Soldier extends Unit {
         }
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-
+    // Fungsi menjalankan state BUILD_TOWER
     private static void executeBuildTower() throws GameActionException {
         if (ruinTarget == null) { state = STATE_EXPLORE; return; }
-
         int towers    = rc.getNumberTowers();
         UnitType type = chooseTowerType(towers);
-
         
         if (rc.canCompleteTowerPattern(type, ruinTarget)) {
             rc.completeTowerPattern(type, ruinTarget);
@@ -205,10 +160,8 @@ public class Soldier extends Unit {
             state = STATE_EXPLORE;
             return;
         }
-
         MapLocation myLoc = rc.getLocation();
         int distToRuin = myLoc.distanceSquaredTo(ruinTarget);
-
         
         if (!patternMarked && distToRuin <= 2) {
             if (rc.canMarkTowerPattern(type, ruinTarget)) {
@@ -216,7 +169,6 @@ public class Soldier extends Unit {
                 patternMarked = true;
             }
         }
-
         
         if (rc.isActionReady()) {
             
@@ -235,7 +187,6 @@ public class Soldier extends Unit {
                 }
             }
         }
-
         
         if (rc.isMovementReady()) {
             if (paintTarget != null) {
@@ -251,13 +202,9 @@ public class Soldier extends Unit {
         }
     }
 
-    
-    
-    
-
+    // Fungsi menjalankan state GOTO_RUIN
     private static void executeGotoRuin() throws GameActionException {
         if (ruinTarget == null) { state = STATE_EXPLORE; return; }
-
         
         if (rc.canSenseLocation(ruinTarget)) {
             if (isTowerBuiltAt(ruinTarget)) {
@@ -269,30 +216,22 @@ public class Soldier extends Unit {
             state = STATE_BUILD_TOWER;
             return;
         }
-
         
         if (rc.isMovementReady()) {
             moveSimple(ruinTarget);
             checkStuck();
         }
     }
-
     
-    
-    
-
+    // Fungsi menjalankan state REFILL
     private static void executeRefill() throws GameActionException {
         if (!refillPaint()) {
             state = STATE_EXPLORE;
         }
     }
-
     
-    
-    
-
+    // Fungsi menjalankan state EXPAND
     private static void executeExpand() throws GameActionException {
-        
         MapLocation nearRuin = findNearbyEmptyRuin();
         if (nearRuin != null && rc.getMoney() >= chipsRequired(rc.getNumberTowers())) {
             ruinTarget    = nearRuin;
@@ -301,8 +240,37 @@ public class Soldier extends Unit {
             state = STATE_BUILD_TOWER;
             return;
         }
-
-        
+        // Untuk 20% bots, membuat SRP baru
+        if (rc.getID() % 5 == 0 && rc.getPaint() > 100) {
+            RobotInfo[] enemies = rc.senseNearbyRobots(-1, rc.getTeam().opponent());
+            if (enemies.length == 0) {
+                MapInfo[] nearTiles = rc.senseNearbyMapInfos(-1);
+                for (MapInfo t : nearTiles) {
+                    if (rc.canCompleteResourcePattern(t.getMapLocation())) {
+                        rc.completeResourcePattern(t.getMapLocation());
+                        return;
+                    }
+                }
+                MapLocation myLoc = rc.getLocation();
+                if (rc.canMarkResourcePattern(myLoc)) {
+                    rc.markResourcePattern(myLoc);
+                }
+                if (rc.isActionReady()) {
+                    for (MapInfo t : nearTiles) {
+                        PaintType mark  = t.getMark();
+                        PaintType paint = t.getPaint();
+                        if (mark != PaintType.EMPTY && mark != paint && t.isPassable()) {
+                            boolean sec = (mark == PaintType.ALLY_SECONDARY);
+                            if (rc.canAttack(t.getMapLocation())) {
+                                rc.attack(t.getMapLocation(), sec);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Paint tile terbaik dalam jangkauan attack 
         if (rc.isActionReady()) {
             MapLocation best = findBestExpandPaintTarget();
             if (best != null) {
@@ -316,7 +284,7 @@ public class Soldier extends Unit {
                 }
             }
         }
-
+        // bots bergerak
         if (rc.isMovementReady()) {
             if (expandTarget != null) {
                 moveSimple(expandTarget);
@@ -327,10 +295,7 @@ public class Soldier extends Unit {
         }
     }
 
-    
-    
-    
-
+    // Fungsi menjalankan state COMBAT
     private static void executeCombat() throws GameActionException {
         if (combatTarget == null) { state = STATE_EXPLORE; return; }
 
@@ -354,10 +319,7 @@ public class Soldier extends Unit {
         if (rc.isMovementReady()) moveSimple(combatTarget);
     }
 
-    
-    
-    
-
+    // Fungsi menjalankan state EXPLORE
     private static void executeExplore() throws GameActionException {
         
         RobotInfo[] enemies = rc.senseNearbyRobots(-1, rc.getTeam().opponent());
@@ -378,11 +340,7 @@ public class Soldier extends Unit {
         }
     }
 
-    
-    
-    
-
-    
+    // Fungsi mencari rute terbaik
     private static MapLocation findBestPatternTile(MapLocation ruinCenter)
             throws GameActionException {
         MapLocation myLoc = rc.getLocation();
@@ -413,7 +371,58 @@ public class Soldier extends Unit {
         return best;
     }
 
-    
+    // score setiap ruin berdasarkan kondisi yang ada
+    private static MapLocation findAssignedRuin() {
+        if (knownRuinCount == 0) return null;
+
+        MapLocation myLoc = rc.getLocation();
+
+        // Score setiap ruin
+        MapLocation[] top   = new MapLocation[3];
+        int[]         score = {Integer.MIN_VALUE, Integer.MIN_VALUE, Integer.MIN_VALUE};
+
+        for (int i = 0; i < knownRuinCount; i++) {
+            MapLocation ruin = knownRuins[i];
+            int dist = myLoc.distanceSquaredTo(ruin);
+            int s = -dist;
+
+            // nilai dikurangi jika musuh diketahui dekat ruin ini 
+            if (lastKnownEnemyLoc != null && rc.getRoundNum() - lastKnownEnemyRound < 60) {
+                int enemyToRuin = ruin.distanceSquaredTo(lastKnownEnemyLoc);
+                if (enemyToRuin < 100) {
+                    s -= (100 - enemyToRuin) * 4;
+                }
+            }
+
+            // Bonus kecil jika ruin lebih dekat ke ally territory
+            if (spawnLocation != null) {
+                int ruinDistFromSpawn = ruin.distanceSquaredTo(spawnLocation);
+                int myDistFromSpawn   = myLoc.distanceSquaredTo(spawnLocation);
+                if (ruinDistFromSpawn < myDistFromSpawn) {
+                    s += 15;
+                }
+            }
+            if (s > score[0]) {
+                score[2] = score[1]; top[2] = top[1];
+                score[1] = score[0]; top[1] = top[0];
+                score[0] = s;        top[0] = ruin;
+            } else if (s > score[1]) {
+                score[2] = score[1]; top[2] = top[1];
+                score[1] = s;        top[1] = ruin;
+            } else if (s > score[2]) {
+                score[2] = s;        top[2] = ruin;
+            }
+        }
+
+        // Hitung slot terisi
+        int filled = 0;
+        for (int k = 0; k < 3; k++) if (top[k] != null) filled++;
+        if (filled == 0) return null;
+        int idx = rc.getID() % filled;
+        return top[idx] != null ? top[idx] : top[0];
+    }
+
+    // Fungsi untuk mencari terdekat ruin
     private static MapLocation findNearbyEmptyRuin() throws GameActionException {
         MapInfo[] tiles = rc.senseNearbyMapInfos(-1);
         MapLocation myLoc = rc.getLocation();
@@ -488,11 +497,10 @@ public class Soldier extends Unit {
         if (lastPos != null && cur.equals(lastPos)) {
             posCount++;
             if (posCount >= 6) {
-                
                 currentExploreDirection = null;
+                exploreTarget           = null;
                 posCount = 0;
                 if (state == STATE_GOTO_RUIN || state == STATE_BUILD_TOWER) {
-                    
                     ruinTarget    = null;
                     patternMarked = false;
                     paintTarget   = null;
