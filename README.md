@@ -17,7 +17,7 @@
 
 ## Deskripsi Singkat
 
-Proyek ini mengimplementasikan kecerdasan buatan robot untuk kompetisi Battlecode 2025 menggunakan pendekatan **Algoritma Greedy**. Setiap robbot membuat keputusan optimal secara lokal pada setiap giliran (turn) untuk mencapai hasil global terbaik. Terdapat 3 package bot yang dibangun dengan strategi greedy yang berbeda-beda.
+Proyek ini mengimplementasikan kecerdasan buatan robot untuk kompetisi Battlecode 2025 menggunakan pendekatan **Algoritma Greedy**. Setiap robot membuat keputusan optimal secara lokal pada setiap giliran (turn) untuk mencapai hasil global terbaik. Terdapat 3 package bot yang dibangun dengan strategi greedy yang berbeda-beda.
 
 ## Requirement
 
