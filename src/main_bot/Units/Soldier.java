@@ -1,6 +1,5 @@
-package alternative_bots_2.Units;
+package main_bot.Units;
 
-import alternative_bots_2.Unit;
 import battlecode.common.Direction;
 import battlecode.common.GameActionException;
 import battlecode.common.MapInfo;
@@ -8,9 +7,11 @@ import battlecode.common.MapLocation;
 import battlecode.common.PaintType;
 import battlecode.common.RobotInfo;
 import battlecode.common.UnitType;
+import main_bot.Unit;
 
 public class Soldier extends Unit {
 
+    // State untuk soldier
     private static final int STATE_EXPLORE      = 0;
     private static final int STATE_BUILD_RUIN   = 1;
     private static final int STATE_ATTACK_TOWER = 2;
@@ -18,10 +19,10 @@ public class Soldier extends Unit {
     private static final int STATE_EXPAND_SRP   = 4;
     private static final int STATE_RETREAT      = 5;
 
-    private static int state = STATE_EXPLORE;
+    private static int state = STATE_EXPLORE; // default state
     private static MapLocation modeTarget = null;
 
-    // SRP expand
+    // SRP
     private static MapLocation[] srpCheckLocs = null;
     private static int srpCheckIdx = 0;
 
@@ -30,34 +31,32 @@ public class Soldier extends Unit {
     private static final int RUIN_WAIT_MAX = 35;
 
     // Fungsi untuk menjalankan soldier
-
     public static void run() throws GameActionException {
         initUnit();
         processMessages();
         scanEnvironment();
         tryUpgradeNearbyTower();
 
-        // RETREAT jika paint < 5%
+        // Refill paint ketika paint < 5%
         int paint = rc.getPaint();
         int paintMax = rc.getType().paintCapacity;
         if (paint * 20 < paintMax) {
             doRetreat();
             return;
         }
-        // Keluar retreat jika paint >= 7.5%
+        // bergerak setelah paint terisi
         if (state == STATE_RETREAT && paint * 100 / paintMax >= 8) {
             state = STATE_EXPLORE;
         }
 
-        // Scan target penting saat explore / expand
+        // Mencari target penting
         if (state == STATE_EXPLORE || state == STATE_EXPAND_SRP) {
             checkForImportantTargets();
         }
-
         executeState();
     }
 
-    // Fungsi untuk state machine
+    // Fungsi untuk memetakan state yang ada
     private static void executeState() throws GameActionException {
         switch (state) {
             case STATE_BUILD_RUIN:   executeBuildRuin(); break;
@@ -69,11 +68,11 @@ public class Soldier extends Unit {
         }
     }
 
-    // Fungsi untuk mengecek target penting
+    // Fungsi untuk mengecek target penting (Enemy Tower > Empty ruin > SRP)
     private static void checkForImportantTargets() throws GameActionException {
         RobotInfo[] enemies = rc.senseNearbyRobots(-1, rc.getTeam().opponent());
 
-        // 1. Enemy tower → attack
+        // Enemy tower -> attack
         for (RobotInfo e : enemies) {
             if (isTowerType(e.getType())) {
                 modeTarget = e.getLocation();
@@ -83,7 +82,7 @@ public class Soldier extends Unit {
             }
         }
 
-        // 2. Empty ruin → build
+        // Empty ruin -> paint
         MapLocation nearRuin = findNearbyEmptyRuin();
         if (nearRuin != null) {
             modeTarget = nearRuin;
@@ -92,7 +91,7 @@ public class Soldier extends Unit {
             return;
         }
 
-        // 3. SRP candidate
+        // Membuat SRP
         MapLocation myLoc = rc.getLocation();
         MapLocation srpCand = snapToSRPGrid(myLoc);
         if (srpCand.distanceSquaredTo(myLoc) <= 2 && canStartSRP(srpCand)) {
@@ -103,7 +102,6 @@ public class Soldier extends Unit {
     }
 
     // Fungsi untuk eksplorasi
-
     private static void executeExplore() throws GameActionException {
         // Paint tile saat explore
         if (rc.isActionReady()) paintNearbyTile();
@@ -116,7 +114,7 @@ public class Soldier extends Unit {
             state = STATE_BUILD_RUIN;
         }
 
-        // Cek known ruin dari cache
+        // Cek known ruin
         if (state == STATE_EXPLORE) {
             MapLocation knownRuin = findNearestKnownRuin();
             if (knownRuin != null && rc.getMoney() >= 700) {
@@ -124,20 +122,17 @@ public class Soldier extends Unit {
                 state = STATE_BUILD_RUIN;
             }
         }
-
         if (rc.isMovementReady()) explore();
-
         // Paint lagi setelah move
         if (rc.isActionReady()) paintNearbyTile();
     }
 
-    // Fungsi untuk membangun tower di ruin (manual API)
+    // Fungsi untuk membangun tower di ruin 
     private static void executeBuildRuin() throws GameActionException {
         if (modeTarget == null) { state = STATE_EXPLORE; return; }
         MapLocation myLoc = rc.getLocation();
         MapLocation ruinLoc = modeTarget;
 
-        // 1. Cek tower sudah jadi
         if (rc.canSenseLocation(ruinLoc)) {
             if (rc.canSenseRobotAtLocation(ruinLoc)) {
                 RobotInfo r = rc.senseRobotAtLocation(ruinLoc);
@@ -150,36 +145,28 @@ public class Soldier extends Unit {
             }
         }
 
-        // 2. Dekati jika belum dalam sensor
+        // dekati
         if (!rc.canSenseLocation(ruinLoc)) {
             if (rc.isMovementReady()) bugNavigateTo(ruinLoc);
             return;
         }
-
-        // 3. Claim ruin (mark 1 tile)
+        // Claim ruin 
         ensureRuinClaimed(ruinLoc);
 
-        // 4. Tentukan tipe tower
+        // Menentukan tipe tower dan mengeksekusinya
         UnitType towerType = getNewTowerType();
-
-        // 5. Coba complete langsung
         if (rc.canCompleteTowerPattern(towerType, ruinLoc)) {
             rc.completeTowerPattern(towerType, ruinLoc);
             onTowerBuilt(towerType, ruinLoc);
             return;
         }
-
-        // 6. Positioning: orbit di sekitar ruin
         positionAroundRuin(myLoc, ruinLoc);
-
-        // 7. Paint tiles
         if (rc.isActionReady() && rc.getPaint() >= 5) {
             boolean[][] pattern = rc.getTowerPattern(towerType);
             if (!trySelfPaint(myLoc, ruinLoc, pattern)) {
                 MapLocation enemyRef = resolveEnemyLocation();
                 paintBestPatternTile(ruinLoc, pattern, enemyRef);
             }
-            // Coba complete lagi
             if (rc.canCompleteTowerPattern(towerType, ruinLoc)) {
                 rc.completeTowerPattern(towerType, ruinLoc);
                 onTowerBuilt(towerType, ruinLoc);
@@ -187,7 +174,7 @@ public class Soldier extends Unit {
             }
         }
 
-        // 8. Chip saving jika pattern penuh tapi chip kurang
+        // Chip saving jika pattern penuh tapi chip kurang
         int dist = myLoc.distanceSquaredTo(ruinLoc);
         if (dist <= 8 && rc.getPaint() >= 5) {
             boolean[][] pattern = rc.getTowerPattern(towerType);
@@ -201,6 +188,7 @@ public class Soldier extends Unit {
         }
     }
 
+    // Fungsi untuk menangani setelah tower berhasil dibangun
     private static void onTowerBuilt(UnitType type, MapLocation loc) {
         if (isPaintTower(type)) addKnownPaintTower(loc);
         addKnownAllyTower(loc);
@@ -210,12 +198,13 @@ public class Soldier extends Unit {
         state = STATE_EXPLORE;
     }
 
+    // Fungsi untuk memastikan ruin sudah diklaim
     private static void ensureRuinClaimed(MapLocation ruinLoc) throws GameActionException {
         for (Direction d : Direction.values()) {
             MapLocation adj = ruinLoc.add(d);
             if (rc.canSenseLocation(adj)) {
                 MapInfo info = rc.senseMapInfo(adj);
-                if (info.getMark() != PaintType.EMPTY) return; // sudah diklaim
+                if (info.getMark() != PaintType.EMPTY) return;
             }
         }
         MapLocation northLoc = ruinLoc.add(Direction.NORTH);
@@ -224,13 +213,13 @@ public class Soldier extends Unit {
         }
     }
 
+    //  Fungsi untuk posisi setiap ruin
     private static void positionAroundRuin(MapLocation myLoc, MapLocation ruinLoc) throws GameActionException {
         if (!rc.isMovementReady()) return;
         if (myLoc.distanceSquaredTo(ruinLoc) > 2) {
             bugNavigateTo(ruinLoc);
             return;
         }
-        // Orbit cardinal: pindah ke posisi cardinal berikutnya
         Direction ruinToMe = ruinLoc.directionTo(myLoc);
         int cardIdx = ((ruinToMe.ordinal() / 2) + 1) % 4;
         MapLocation nextSpot = ruinLoc.add(cardinalDirs[cardIdx]);
@@ -240,6 +229,7 @@ public class Soldier extends Unit {
         }
     }
 
+    // Fungsi untuk soldier memberikan paint mark
     private static boolean trySelfPaint(MapLocation myLoc, MapLocation ruinLoc, boolean[][] pattern)
             throws GameActionException {
         int dx = myLoc.x - ruinLoc.x + 2;
@@ -257,6 +247,7 @@ public class Soldier extends Unit {
         return false;
     }
 
+    // Fungsi untuk mengecat tile pattern terbaik
     private static void paintBestPatternTile(MapLocation ruinLoc, boolean[][] pattern, MapLocation enemyRef)
             throws GameActionException {
         int offset = rand() % 25;
@@ -268,16 +259,16 @@ public class Soldier extends Unit {
             int idx = (i + offset) % 25;
             int dx = idx % 5;
             int dy = idx / 5;
-            if (dx == 2 && dy == 2) continue; // skip center (ruin)
+            if (dx == 2 && dy == 2) continue;
             MapLocation tileLoc = ruinLoc.translate(dx - 2, dy - 2);
             if (!rc.canSenseLocation(tileLoc)) continue;
             if (!rc.canAttack(tileLoc)) continue;
             MapInfo info = rc.senseMapInfo(tileLoc);
             if (!info.isPassable()) continue;
-            if (info.getPaint().isEnemy()) continue; // soldier can't override enemy
+            if (info.getPaint().isEnemy()) continue;
             boolean wantSec = pattern[dx][dy];
             PaintType want = wantSec ? PaintType.ALLY_SECONDARY : PaintType.ALLY_PRIMARY;
-            if (info.getPaint() == want) continue; // sudah benar
+            if (info.getPaint() == want) continue;
 
             int d = tileLoc.distanceSquaredTo(enemyRef);
             if (d < bestEnemyDist) {
@@ -291,6 +282,7 @@ public class Soldier extends Unit {
         }
     }
 
+    // Fungsi untuk mengecek apakah pattern penuh
     private static boolean isPatternFullyPainted(MapLocation ruinLoc, boolean[][] pattern)
             throws GameActionException {
         for (int dx = 0; dx < 5; dx++) {
@@ -308,24 +300,20 @@ public class Soldier extends Unit {
     }
 
     // Fungsi untuk memilih tipe tower
-
     private static UnitType getNewTowerType() {
         int n = rc.getNumberTowers();
         if (n < 4) return UnitType.LEVEL_ONE_MONEY_TOWER;
-        // Cycle: M P P M P P ...
         int cycle = (n - 4) % 3;
         if (cycle == 0) return UnitType.LEVEL_ONE_MONEY_TOWER;
         return UnitType.LEVEL_ONE_PAINT_TOWER;
     }
 
     // Fungsi untuk menyerang tower musuh
-
     private static void executeAttackTower() throws GameActionException {
         if (modeTarget == null) { state = STATE_EXPLORE; return; }
         MapLocation myLoc = rc.getLocation();
         MapLocation tLoc = modeTarget;
-
-        // Cek tower masih ada
+        // Cek tower musuh
         if (rc.canSenseLocation(tLoc)) {
             if (!rc.canSenseRobotAtLocation(tLoc)) {
                 modeTarget = null;
@@ -341,18 +329,15 @@ public class Soldier extends Unit {
         }
 
         int dist = myLoc.distanceSquaredTo(tLoc);
-
-        // Approach jika di luar attack range
+        // dekati
         if (dist > rc.getType().actionRadiusSquared) {
             if (rc.isMovementReady()) bugNavigateTo(tLoc);
         }
-
         // Attack
         if (rc.isActionReady() && rc.canAttack(tLoc)) {
             rc.attack(tLoc);
         }
-
-        // Kite: mundur setelah serang
+        // mundur setelah serang
         if (rc.isMovementReady() && myLoc.distanceSquaredTo(tLoc) <= 9) {
             Direction away = tLoc.directionTo(myLoc);
             if (!tryMove(away)) {
@@ -364,12 +349,10 @@ public class Soldier extends Unit {
     }
 
     // Fungsi untuk membangun SRP
-
     private static void executeBuildSRP() throws GameActionException {
         if (modeTarget == null) { state = STATE_EXPLORE; return; }
         MapLocation srpLoc = modeTarget;
         MapLocation myLoc = rc.getLocation();
-
         // Mark center sebagai klaim
         if (rc.canSenseLocation(srpLoc)) {
             MapInfo centerInfo = rc.senseMapInfo(srpLoc);
@@ -382,7 +365,6 @@ public class Soldier extends Unit {
         boolean noTilePainted = true;
 
         if (rc.isActionReady() && rc.getPaint() >= 5) {
-            // Self-paint dulu
             int sdx = myLoc.x - srpLoc.x + 2;
             int sdy = myLoc.y - srpLoc.y + 2;
             if (sdx >= 0 && sdx <= 4 && sdy >= 0 && sdy <= 4) {
@@ -417,19 +399,19 @@ public class Soldier extends Unit {
             }
         }
 
-        // Try complete
+        // Menyelesaikan pattern
         if (rc.canCompleteResourcePattern(srpLoc)) {
             rc.completeResourcePattern(srpLoc);
             setupSRPExpand(srpLoc);
             return;
         }
 
-        // Move closer jika tidak bisa paint apa-apa
         if (noTilePainted && rc.isMovementReady()) {
             bugNavigateTo(srpLoc);
         }
     }
 
+    // Fungsi untuk menyiapkan 8 lokasi tetangga SRP yang akan dicek untuk ekspansi
     private static void setupSRPExpand(MapLocation srp) {
         srpCheckLocs = new MapLocation[]{
             srp.translate(4, 0), srp.translate(-4, 0),
@@ -442,12 +424,12 @@ public class Soldier extends Unit {
         modeTarget = null;
     }
 
+    // Fungsi untuk melakukan expand SRP
     private static void executeExpandSRP() throws GameActionException {
         if (srpCheckLocs == null || srpCheckIdx >= srpCheckLocs.length) {
             state = STATE_EXPLORE;
             return;
         }
-
         MapLocation candidate = srpCheckLocs[srpCheckIdx];
         int W = rc.getMapWidth(), H = rc.getMapHeight();
 
@@ -466,16 +448,13 @@ public class Soldier extends Unit {
             srpCheckIdx++;
             return;
         }
-        // Belum bisa sense → dekati
         if (rc.isMovementReady()) bugNavigateTo(candidate);
-
-        // Paint sambil jalan
         if (rc.isActionReady()) paintNearbyTile();
     }
 
+    // Fungsi untuk mundur ke paint tower terdekat dan mengisi ulang paint
     private static void doRetreat() throws GameActionException {
         state = STATE_RETREAT;
-
         // Cari paint tower visible
         MapLocation paintTower = null;
         int minDist = Integer.MAX_VALUE;
@@ -507,6 +486,7 @@ public class Soldier extends Unit {
         }
     }
 
+    // Fungsi pencarian ruin terdekat (A*)
     private static MapLocation findNearbyEmptyRuin() throws GameActionException {
         MapInfo[] tiles = rc.senseNearbyMapInfos(-1);
         MapLocation myLoc = rc.getLocation();

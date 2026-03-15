@@ -1,4 +1,4 @@
-package alternative_bots_2;
+package main_bot;
 
 import battlecode.common.Direction;
 import battlecode.common.GameActionException;
@@ -45,6 +45,7 @@ public class Unit extends BaseRobot {
         }
     }
 
+    // Fungsi untuk menghasilkan bilangan acak menggunakan XOR-shift
     public static int rand() {
         rngState ^= rngState << 13;
         rngState ^= rngState >> 17;
@@ -58,7 +59,6 @@ public class Unit extends BaseRobot {
         MapLocation myLoc = rc.getLocation();
         if (myLoc.equals(target)) return;
 
-        // Auto-reset saat target berubah
         if (bugTarget == null || !bugTarget.equals(target)) {
             huggingWall = false;
             bugTarget = target;
@@ -89,15 +89,17 @@ public class Unit extends BaseRobot {
         }
     }
 
-    // Backward compat — delegate ke Bug2
+    // Fungsi untuk backward compatibility, delegasi ke bugNavigateTo
     public static void moveGreedy(MapLocation target) throws GameActionException {
         bugNavigateTo(target);
     }
 
+    // Fungsi untuk backward compatibility, delegasi ke bugNavigateTo
     public static void moveSimple(MapLocation target) throws GameActionException {
         bugNavigateTo(target);
     }
 
+    // Fungsi untuk mencoba bergerak ke arah tertentu, return true jika berhasil
     public static boolean tryMove(Direction dir) throws GameActionException {
         if (rc.canMove(dir)) { rc.move(dir); return true; }
         return false;
@@ -129,6 +131,7 @@ public class Unit extends BaseRobot {
         return t;
     }
 
+    // Fungsi untuk eksplorasi menggunakan sistem 9 titik dengan Bug2 pathfinding
     public static void explore() throws GameActionException {
         if (!rc.isMovementReady()) return;
         bugNavigateTo(currentExploreTarget9());
@@ -225,11 +228,13 @@ public class Unit extends BaseRobot {
         return new MapLocation(W / 2, H / 2);
     }
 
-    // Fungsi untuk helper SRP
+    // === Fungsi untuk helper SRP ===
+    // Fungsi untuk mengecek apakah lokasi valid sebagai center SRP (grid 4x4 offset 2)
     public static boolean isResourcePatternCenter(MapLocation loc) {
         return loc.x % 4 == 2 && loc.y % 4 == 2;
     }
 
+    // Fungsi untuk snap lokasi ke grid SRP terdekat
     public static MapLocation snapToSRPGrid(MapLocation loc) {
         int x = (loc.x / 4) * 4 + 2;
         int y = (loc.y / 4) * 4 + 2;
@@ -239,6 +244,7 @@ public class Unit extends BaseRobot {
         return new MapLocation(x, y);
     }
 
+    // Fungsi untuk mengecek apakah SRP bisa dimulai di lokasi
     public static boolean canStartSRP(MapLocation loc) throws GameActionException {
         if (!isResourcePatternCenter(loc)) return false;
         if (!rc.canSenseLocation(loc)) return false;
@@ -272,6 +278,7 @@ public class Unit extends BaseRobot {
         return true;
     }
 
+    // Fungsi untuk mencari paint tower terdekat dari sensor range
     private static MapLocation findNearestPaintTower() throws GameActionException {
         RobotInfo[] allies = rc.senseNearbyRobots(-1, rc.getTeam());
         MapLocation nearest = null;
@@ -293,6 +300,7 @@ public class Unit extends BaseRobot {
         return nearest;
     }
 
+    // Fungsi untuk mencari paint tower terdekat yang sudah diketahui
     private static MapLocation findNearestKnownPaintTower() {
         MapLocation myLoc = rc.getLocation();
         MapLocation nearest = null;
@@ -304,6 +312,7 @@ public class Unit extends BaseRobot {
         return nearest;
     }
 
+    // Fungsi untuk mengambil paint dari tower ally
     private static void withdrawPaint(MapLocation towerLoc) throws GameActionException {
         if (!rc.isActionReady()) return;
         int needed = rc.getType().paintCapacity - rc.getPaint();
@@ -320,7 +329,8 @@ public class Unit extends BaseRobot {
         }
     }
 
-    // Fungsi untuk broadcast dan komunikasi
+    // === Fungsi untuk broadcast dan komunikasi ===
+    // Fungsi untuk broadcast lokasi musuh ke tower ally terdekat
     public static void broadcastEnemyLocation(MapLocation enemyLoc) throws GameActionException {
         int msg = encodeMessage(MSG_ENEMY_LOC, enemyLoc.x, enemyLoc.y, rc.getRoundNum() % EXTRA_MASK);
         RobotInfo[] allies = rc.senseNearbyRobots(-1, rc.getTeam());
@@ -334,6 +344,7 @@ public class Unit extends BaseRobot {
         }
     }
 
+    // Fungsi untuk broadcast lokasi tower musuh ke tower ally terdekat
     public static void broadcastEnemyTower(MapLocation towerLoc) throws GameActionException {
         int msg = encodeMessage(MSG_ENEMY_TOWER, towerLoc.x, towerLoc.y, rc.getRoundNum() % EXTRA_MASK);
         RobotInfo[] allies = rc.senseNearbyRobots(-1, rc.getTeam());
@@ -347,6 +358,7 @@ public class Unit extends BaseRobot {
         }
     }
 
+    // Fungsi untuk meminta mopper datang ke lokasi tertentu via tower
     public static void requestMopper(MapLocation loc) throws GameActionException {
         int msg = encodeMessage(MSG_MOPPER_REQ, loc.x, loc.y, rc.getRoundNum() % EXTRA_MASK);
         RobotInfo[] allies = rc.senseNearbyRobots(-1, rc.getTeam());
@@ -360,6 +372,7 @@ public class Unit extends BaseRobot {
         }
     }
 
+    // Fungsi untuk broadcast lokasi ruin kosong ke ally terdekat (max 3)
     public static void broadcastRuin(MapLocation ruinLoc) throws GameActionException {
         int msg = encodeMessage(MSG_RUIN_LOC, ruinLoc.x, ruinLoc.y, rc.getRoundNum() % EXTRA_MASK);
         RobotInfo[] allies = rc.senseNearbyRobots(-1, rc.getTeam());
@@ -372,6 +385,7 @@ public class Unit extends BaseRobot {
         }
     }
 
+    // Fungsi untuk broadcast bahwa pattern ruin sudah penuh, butuh chip dari tower
     public static void broadcastRuinReady(MapLocation ruinLoc) throws GameActionException {
         int msg = encodeMessage(MSG_RUIN_READY, ruinLoc.x, ruinLoc.y, rc.getRoundNum() % EXTRA_MASK);
         RobotInfo[] allies = rc.senseNearbyRobots(-1, rc.getTeam());
@@ -385,6 +399,7 @@ public class Unit extends BaseRobot {
         }
     }
 
+    // Fungsi untuk membaca target terdekat dari broadcast berdasarkan tipe pesan
     public static MapLocation readBroadcastTarget(int msgType) throws GameActionException {
         Message[] messages = rc.readMessages(-1);
         if (messages.length == 0) return null;
@@ -409,6 +424,7 @@ public class Unit extends BaseRobot {
         return bestLoc;
     }
 
+    // Fungsi untuk memproses semua pesan masuk dan update cache internal
     public static void processMessages() throws GameActionException {
         Message[] messages = rc.readMessages(-1);
         int currentRound = rc.getRoundNum();
@@ -478,7 +494,7 @@ public class Unit extends BaseRobot {
         }
     }
 
-    // Fungsi utilitas
+    // Fungsi untuk bergerak acak (fallback jika tidak ada target)
     public static void wander() throws GameActionException {
         if (!rc.isMovementReady()) return;
         if (currentExploreDirection == null || !rc.canMove(currentExploreDirection)) {
@@ -497,6 +513,7 @@ public class Unit extends BaseRobot {
         }
     }
 
+    // Fungsi untuk mengecat tile di bawah posisi robot sendiri
     public static void paintUnderSelf() throws GameActionException {
         if (!rc.isActionReady()) return;
         MapLocation myLoc = rc.getLocation();
@@ -509,7 +526,8 @@ public class Unit extends BaseRobot {
         }
     }
 
-    // Fungsi untuk manajemen cache
+    // === Fungsi untuk manajemen cache ===
+    // Fungsi untuk menambahkan paint tower ke cache 
     public static void addKnownPaintTower(MapLocation loc) {
         for (int i = 0; i < knownPaintTowerCount; i++) {
             if (knownPaintTowers[i].equals(loc)) return;
@@ -519,6 +537,7 @@ public class Unit extends BaseRobot {
         }
     }
 
+    // Fungsi untuk menambahkan tower ally ke cache 
     public static void addKnownAllyTower(MapLocation loc) {
         for (int i = 0; i < knownAllyTowerCount; i++) {
             if (knownAllyTowers[i].equals(loc)) return;
@@ -528,6 +547,7 @@ public class Unit extends BaseRobot {
         }
     }
 
+    // Fungsi untuk menambahkan ruin ke cache 
     public static void addKnownRuin(MapLocation loc) {
         for (int i = 0; i < knownRuinCount; i++) {
             if (knownRuins[i].equals(loc)) return;
@@ -537,6 +557,7 @@ public class Unit extends BaseRobot {
         }
     }
 
+    // Fungsi untuk mencari ruin terdekat dari cache yang sudah diketahui
     public static MapLocation findNearestKnownRuin() {
         MapLocation myLoc = rc.getLocation();
         MapLocation nearest = null;
@@ -548,6 +569,7 @@ public class Unit extends BaseRobot {
         return nearest;
     }
 
+    // Fungsi untuk menghapus ruin dari cache (setelah tower dibangun)
     public static void removeKnownRuin(MapLocation loc) {
         for (int i = 0; i < knownRuinCount; i++) {
             if (knownRuins[i].equals(loc)) {
@@ -558,6 +580,7 @@ public class Unit extends BaseRobot {
         }
     }
 
+    // Fungsi untuk menentukan fase permainan (0=early, 1=mid, 2=late)
     public static int getGamePhase() {
         int round = rc.getRoundNum();
         if (round < EARLY_GAME_END) return 0;
@@ -565,14 +588,17 @@ public class Unit extends BaseRobot {
         return 2;
     }
 
+    // Fungsi untuk mengecek apakah paint di bawah threshold rendah (20%)
     public static boolean isLowPaint() {
         return (rc.getPaint() * 100 / rc.getType().paintCapacity) < LOW_PAINT_PERCENT;
     }
 
+    // Fungsi untuk menghitung jumlah ally di sekitar
     public static int countNearbyAllies() throws GameActionException {
         return rc.senseNearbyRobots(-1, rc.getTeam()).length;
     }
 
+    // Fungsi untuk menghitung jumlah musuh di sekitar
     public static int countNearbyEnemies() throws GameActionException {
         return rc.senseNearbyRobots(-1, rc.getTeam().opponent()).length;
     }

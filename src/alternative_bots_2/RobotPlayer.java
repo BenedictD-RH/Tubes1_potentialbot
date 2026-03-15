@@ -1,44 +1,43 @@
 package alternative_bots_2;
 
-import battlecode.common.Clock;
-import battlecode.common.GameActionException;
-import battlecode.common.RobotController;
-import alternative_bots_2.Units.Mopper;
-import alternative_bots_2.Units.Soldier;
-import alternative_bots_2.Units.Splasher;
+import battlecode.common.*;
+import java.util.Random;
 
 public class RobotPlayer {
 
+    static int turnCount = 0;
+    static final Random rng = new Random(6147);
+    static final Direction[] directions = {
+        Direction.NORTH,
+        Direction.NORTHEAST,
+        Direction.EAST,
+        Direction.SOUTHEAST,
+        Direction.SOUTH,
+        Direction.SOUTHWEST,
+        Direction.WEST,
+        Direction.NORTHWEST,
+    };
+    
     @SuppressWarnings("unused")
+    static MapLocation mapCenter;
+
     public static void run(RobotController rc) throws GameActionException {
-        BaseRobot.rc = rc;
+
+        if (mapCenter == null) {
+            mapCenter = new MapLocation(rc.getMapWidth()/2, rc.getMapHeight()/2);
+        }
+
+        rc.setIndicatorString("Hello world!");
 
         while (true) {
+            turnCount += 1;
+
             try {
                 switch (rc.getType()) {
-                    case MOPPER:
-                        Mopper.run();
-                        break;
-                    case SOLDIER:
-                        Soldier.run();
-                        break;
-                    case SPLASHER:
-                        Splasher.run();
-                        break;
-                    
-                    case LEVEL_ONE_PAINT_TOWER:
-                    case LEVEL_ONE_MONEY_TOWER:
-                    case LEVEL_ONE_DEFENSE_TOWER:
-                    case LEVEL_TWO_PAINT_TOWER:
-                    case LEVEL_TWO_MONEY_TOWER:
-                    case LEVEL_TWO_DEFENSE_TOWER:
-                    case LEVEL_THREE_PAINT_TOWER:
-                    case LEVEL_THREE_MONEY_TOWER:
-                    case LEVEL_THREE_DEFENSE_TOWER:
-                        Tower.run();
-                        break;
-                    default:
-                        break;
+                    case SOLDIER:  Soldier.runSoldier(rc); break;
+                    case MOPPER:   Mopper.runMopper(rc);   break;
+                    case SPLASHER: Splasher.runSplasher(rc); break;
+                    default:       Tower.runTower(rc);     break;
                 }
             } catch (GameActionException e) {
                 System.out.println("GameActionException");
@@ -46,9 +45,9 @@ public class RobotPlayer {
             } catch (Exception e) {
                 System.out.println("Exception");
                 e.printStackTrace();
+            } finally {
+                Clock.yield();
             }
-
-            Clock.yield();
         }
     }
 }
