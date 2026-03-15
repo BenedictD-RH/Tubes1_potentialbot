@@ -5,10 +5,6 @@
 ## Daftar Isi
 
 - [Deskripsi Singkat](#deskripsi-singkat)
-- [Algoritma Greedy per Bot](#algoritma-greedy-per-bot)
-  - [main_bot](#1-main_bot)
-  - [alternative_bots_1](#2-alternative_bots_1)
-  - [alternative_bots_2](#3-alternative_bots_2)
 - [Requirement](#requirement)
 - [Instalasi dan Build](#instalasi-dan-build)
 - [Menjalankan Pertandingan](#menjalankan-pertandingan)
