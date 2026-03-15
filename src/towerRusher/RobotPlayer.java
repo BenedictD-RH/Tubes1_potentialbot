@@ -1,19 +1,14 @@
 package towerRusher;
 
 import battlecode.common.*;
-import scala.Char;
 
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
 import java.util.Random;
-import java.util.Set;
+
 
 
 
 public class RobotPlayer {
-   
+    
     static int turnCount = 0;
 
    
@@ -47,9 +42,11 @@ public class RobotPlayer {
 
     static private boolean buildManager = false;
 
-    static private boolean buildBuilder = false;
+    static private boolean builtEmergencySplasher = false;
 
-    static private int towerDestIdx = 0;
+    static private boolean goClockwise;
+
+    static private int mopperCD = 0;
 
     static final Direction[] directions = {
         Direction.NORTH,
@@ -84,7 +81,6 @@ public class RobotPlayer {
             try {
                 switch (rc.getType()){
                     case SOLDIER:
-                        rc.setIndicatorString(Integer.toString(robotRole));
                         readAndDecodeMessages(rc);
                         if (robotRole == 0) {
                             completeTowerMark(rc);
@@ -106,7 +102,7 @@ public class RobotPlayer {
                         }
                         break; 
                     case MOPPER: runMopper(rc); break;
-                    case SPLASHER: break; 
+                    case SPLASHER: runEmergencySplasher(rc); break; 
                     default: 
                             runTower(rc); 
                         break;
@@ -185,15 +181,44 @@ public class RobotPlayer {
             //System.out.println("SEND MOPPERS NOW!");
         }
 
+        
+        if (!isTowerMaxLevel(rc)) {
+            int addCost = 0;
+            if (isPaintTower(rc)) {
+                addCost = 500;
+            }
+            if (rc.getMoney() >= (rc.getType().getNextLevel().moneyCost + UnitType.SOLDIER.moneyCost) + addCost) {
+                buildManager = true;
+                System.out.println("SEND MANAGER");
+            }
+        }
         Direction dir = directions[rng.nextInt(directions.length)];
         MapLocation nextLoc = rc.getLocation().add(dir);
-        
-        if ((turnCount - 50) % 500 == 0) {
-            buildManager = true;
-            System.out.println("SEND MANAGER");
+        if (isAreaCoveredInEnemyPaint(rc) && !builtEmergencySplasher) {
+            if (rc.canBuildRobot(UnitType.SPLASHER, nextLoc)) {
+                rc.buildRobot(UnitType.SPLASHER, nextLoc);
+                builtEmergencySplasher = true;
+                return;
+            }
         }
+
+        if (isAreaHasTeamPaint(rc)) {
+            while(!rc.senseMapInfo(nextLoc).getPaint().isAlly()) {
+                dir = dir.rotateRight();
+                nextLoc = rc.getLocation().add(dir);
+            }
+        }
+
         if (isPaintTower(rc)) {
-            if ((!sendMoppers) && rc.canBuildRobot(UnitType.SOLDIER, nextLoc)){
+            if (sendMoppers && rc.canBuildRobot(UnitType.MOPPER, nextLoc) && (mopperCD < 4)){
+                mopperCD++;
+                rc.buildRobot(UnitType.MOPPER, nextLoc);
+                if (rc.canSendMessage(nextLoc)) {
+                    rc.sendMessage(nextLoc, encodeMopperInfo());
+                }
+            }
+            else if ((!sendMoppers || mopperCD >= 4) && rc.canBuildRobot(UnitType.SOLDIER, nextLoc)){
+                mopperCD = 0;
                 rc.buildRobot(UnitType.SOLDIER, nextLoc);
                 System.out.println("BUILT A SOLDIER");
 
@@ -213,12 +238,6 @@ public class RobotPlayer {
                     sendTowerLocationsTo(rc, nextLoc, 97);
                 }
             }
-            else if (sendMoppers && rc.canBuildRobot(UnitType.MOPPER, nextLoc)){
-                rc.buildRobot(UnitType.MOPPER, nextLoc);
-                if (rc.canSendMessage(nextLoc)) {
-                    rc.sendMessage(nextLoc, encodeMopperInfo());
-                }
-            }
             RobotInfo[] nearbyRobots = rc.senseNearbyRobots();
             for (RobotInfo robot : nearbyRobots) {
 
@@ -233,11 +252,13 @@ public class RobotPlayer {
                 }
             }
         }
-        if (rc.getType() == UnitType.LEVEL_ONE_MONEY_TOWER || rc.getType() == UnitType.LEVEL_TWO_MONEY_TOWER || rc.getType() == UnitType.LEVEL_THREE_MONEY_TOWER) {
+        if (isMoneyTower(rc)) {
             rc.setIndicatorString(Integer.toString(rc.getMoney()));
-            if (rc.canBuildRobot(UnitType.SOLDIER, nextLoc) && buildManager && !isTowerMaxLevel(rc)) {
-                rc.buildRobot(UnitType.SOLDIER, nextLoc);
-                rc.sendMessage(nextLoc, 10000004);
+            if (rc.canBuildRobot(UnitType.SOLDIER, nextLoc) && (buildManager || turnCount == 1)) {
+                rc.buildRobot(UnitType.SOLDIER, nextLoc); 
+                if (rc.canSendMessage(nextLoc) && turnCount > 1) {
+                    rc.sendMessage(nextLoc, 10000004);
+                }
                 buildManager = false;
                 sendTowerLocationsTo(rc, nextLoc, 92);
             }
@@ -255,6 +276,28 @@ public class RobotPlayer {
     public static void runSoldier(RobotController rc) throws GameActionException{
         scoutMap(rc);
     }
+
+    public static void runEmergencySplasher(RobotController rc) throws GameActionException {
+        MapLocation[] mapCorners = {
+            new MapLocation(0, 0),
+            new MapLocation(mapWidth, 0),
+            new MapLocation(mapWidth, mapHeight),
+            new MapLocation(0,mapHeight)
+        };
+        if (rc.canAttack(rc.getLocation())) {
+            rc.attack(rc.getLocation());
+        }
+        if(rc.canSenseLocation(mapCorners[cornerIdx])) {
+            int d = 1;
+            if (goClockwise) {
+                d = 3;
+            }
+            cornerIdx = (cornerIdx + d) % 4;
+        }
+        if(rc.getActionCooldownTurns() <= 0) {
+            RobotMovement.smartMove(rc, mapCorners[cornerIdx]);
+        }
+    }
     
 
     public static void runMopper(RobotController rc) throws GameActionException{
@@ -267,7 +310,9 @@ public class RobotPlayer {
         };
 
         if(rc.canSenseLocation(mapCorners[cornerIdx])) {
-            cornerIdx = (cornerIdx + 1) % 4;
+            int d = 1;
+            if (goClockwise) d = 3;
+            cornerIdx = (cornerIdx + d) % 4;
         }
         RobotMovement.mopperMove(rc, mapCorners[cornerIdx]);
         Direction dir = directions[rng.nextInt(directions.length)];
@@ -331,9 +376,42 @@ public class RobotPlayer {
         }
     }
 
+    public static MapLocation[] mainMapSearchPoints() {
+        MapLocation[] searchPoints = new MapLocation[5];
+        MapLocation[] mapCorners = {
+            new MapLocation(0, 0),
+            new MapLocation(mapWidth, 0),
+            new MapLocation(mapWidth, mapHeight),
+            new MapLocation(0,mapHeight)
+        };
+        MapLocation spawnTowerLoc = knownTTL.savedLocations[0];
+        MapLocation possibleEnemyTowerLoc = new MapLocation(mapWidth - spawnTowerLoc.x, mapHeight - spawnTowerLoc.y);
+
+
+
+        int nearestPointIdx = 0;
+        for (int i = 0; i < 4; i++) {
+            if (mapCorners[i].distanceSquaredTo(possibleEnemyTowerLoc) < mapCorners[nearestPointIdx].distanceSquaredTo(possibleEnemyTowerLoc)) {
+                nearestPointIdx = i;
+            }
+        }
+        for (int i = 0; i < 5; i++) {
+            if ((nearestPointIdx + 1) > i) {
+                searchPoints[i] = mapCorners[i];
+            }
+            else if ((nearestPointIdx + 1) == i) {
+                searchPoints[i] = possibleEnemyTowerLoc;
+            }
+            else {
+                searchPoints[i] = mapCorners[i + 1];
+            }
+        }
+
+        return searchPoints;
+    }
+
     public static void scoutMap(RobotController rc) throws GameActionException {
         if (!mapDimensionFound) return;
-        
         if (!goBackToTower) {
             MapLocation[] mapCorners = {
                 new MapLocation(0, 0),
@@ -343,13 +421,18 @@ public class RobotPlayer {
             };
 
             if(rc.canSenseLocation(mapCorners[cornerIdx])) {
-                cornerIdx = (cornerIdx + 1) % 4;
+                int d = 1;
+                if (goClockwise) {
+                    d = 3;
+                }
+                cornerIdx = (cornerIdx + 3) % 4;
             }
             RobotMovement.smartMove(rc, mapCorners[cornerIdx]);
         }
         else {
             messageBackToTower(rc);
         }
+        //sendPaintToMoneyTower(rc);
         updateLocationMemory(rc);
         MapInfo currentTile = rc.senseMapInfo(rc.getLocation());
         if (!currentTile.getPaint().isAlly() && rc.canAttack(rc.getLocation()) && rc.getPaint() > rc.getType().paintCapacity*0.5){
@@ -392,10 +475,10 @@ public class RobotPlayer {
         }
     }
 
-    public static boolean isPaintTower(RobotController rc) {
-        if (rc.getType() == UnitType.LEVEL_ONE_PAINT_TOWER || 
-            rc.getType() == UnitType.LEVEL_TWO_PAINT_TOWER ||
-            rc.getType() == UnitType.LEVEL_THREE_PAINT_TOWER) {
+    public static boolean isPaintTower(UnitType type) {
+        if (type == UnitType.LEVEL_ONE_PAINT_TOWER || 
+            type == UnitType.LEVEL_TWO_PAINT_TOWER ||
+            type == UnitType.LEVEL_THREE_PAINT_TOWER) {
             return true;
         }
         else {
@@ -403,53 +486,57 @@ public class RobotPlayer {
         }
     }
 
-    public static void manageTowers(RobotController rc) throws GameActionException {
-        if (turnCount % 50 == 0) {
-            knownTTL.printLocations("Known Team Towers");
+    public static boolean isPaintTower(RobotController rc) {
+        return isPaintTower(rc.getType());
+    }
+
+    public static boolean isPaintTower(RobotInfo robot) {
+        return isPaintTower(robot.getType());
+    }
+
+    public static boolean isMoneyTower(UnitType type) {
+        if (type == UnitType.LEVEL_ONE_MONEY_TOWER || 
+            type == UnitType.LEVEL_TWO_MONEY_TOWER ||
+            type == UnitType.LEVEL_THREE_MONEY_TOWER) {
+            return true;
         }
+        else {
+            return false;
+        }
+    }
+
+    public static boolean isMoneyTower(RobotController rc) {
+        return isMoneyTower(rc.getType());
+    }
+
+    public static boolean isMoneyTower(RobotInfo robot) {
+        return isMoneyTower(robot.getType());
+    }
+
+    public static void manageTowers(RobotController rc) throws GameActionException {
         RobotInfo[] nearbyRobots = rc.senseNearbyRobots();
-        boolean move = true;
         for (RobotInfo robot : nearbyRobots) {
             if (robot.getType().isTowerType()) {
                 if (rc.canUpgradeTower(robot.getLocation())) {
-                    if (rc.getLocation().distanceSquaredTo(robot.getLocation()) >= 8) {
-                        Direction dir = rc.getLocation().directionTo(robot.getLocation());
-                        if (rc.canMove(dir)) {
-                            rc.move(dir);
-                        }
-                    }
                     rc.upgradeTower(robot.getLocation());
                 }
-                else if (isTowerMaxLevel(robot)) {
-                    towerDestIdx += (towerDestIdx +  1) % knownTTL.amountSaved;
+                if (rc.canTransferPaint(robot.getLocation(), -rc.getPaint())) {
+                    rc.transferPaint(robot.getLocation(), -rc.getPaint());
                 }
-                else {
-                    move = false;
-                    if (rc.getLocation().distanceSquaredTo(robot.getLocation()) <= 8) {
-                        Direction dir = rc.getLocation().directionTo(robot.getLocation());
-                        dir = dir.rotateRight().rotateRight().rotateRight().rotateRight();
-                        if (rc.canMove(dir)) {
-                            rc.move(dir);
-                        }
-                    }
-                }
+                break;
             }
         }
-        if (move) {
-            RobotMovement.smartMove(rc, knownTTL.savedLocations[towerDestIdx]);
-        }
-        MapInfo currentTile = rc.senseMapInfo(rc.getLocation());
-        if (!currentTile.getPaint().isAlly() && rc.canAttack(rc.getLocation())){
-            rc.attack(rc.getLocation());
-        }
+        rc.disintegrate();
     }
 
     public static void completeTowerMark(RobotController rc) throws GameActionException {
         MapInfo[] nearbyTiles = rc.senseNearbyMapInfos();
         MapLocation curLoc = null;
         for (MapInfo tile : nearbyTiles){
-            if (tile.hasRuin()){
-                curLoc = tile.getMapLocation();
+            if (rc.onTheMap(tile.getMapLocation())) {
+                if (tile.hasRuin()){
+                    curLoc = tile.getMapLocation();
+                }
             }
         }
         UnitType towerType = UnitType.LEVEL_ONE_MONEY_TOWER;
@@ -469,10 +556,12 @@ public class RobotPlayer {
                 rc.markTowerPattern(towerType, targetLoc);
             }
             for (MapInfo patternTile : rc.senseNearbyMapInfos(targetLoc, 8)){
-                if (patternTile.getMark() != patternTile.getPaint() && patternTile.getMark() != PaintType.EMPTY){
-                    boolean useSecondaryColor = patternTile.getMark() == PaintType.ALLY_SECONDARY;
-                    if (rc.canAttack(patternTile.getMapLocation()))
-                        rc.attack(patternTile.getMapLocation(), useSecondaryColor);
+                if (rc.onTheMap(patternTile.getMapLocation())) {
+                    if (patternTile.getMark() != patternTile.getPaint() && patternTile.getMark() != PaintType.EMPTY){
+                        boolean useSecondaryColor = patternTile.getMark() == PaintType.ALLY_SECONDARY;
+                        if (rc.canAttack(patternTile.getMapLocation()))
+                            rc.attack(patternTile.getMapLocation(), useSecondaryColor);
+                    }
                 }
             }
             if (rc.canCompleteTowerPattern(towerType, targetLoc)){
@@ -497,7 +586,7 @@ public class RobotPlayer {
         String numString = "1";
         numString += mapWidth;
         numString += mapHeight;
-        numString += rng.nextInt(4);
+        numString += rng.nextInt(8);
         numString += "01";
         return Integer.valueOf(numString);
     }
@@ -506,7 +595,7 @@ public class RobotPlayer {
         String numString = "1";
         numString += mapWidth;
         numString += mapHeight;
-        numString += rng.nextInt(4);
+        numString += rng.nextInt(8);
         numString += "05";
         return Integer.valueOf(numString);
     }
@@ -563,7 +652,8 @@ public class RobotPlayer {
             mapWidth = Integer.valueOf(numString.substring(1,3));
             mapHeight = Integer.valueOf(numString.substring(3,5));
             mapDimensionFound = true;
-            cornerIdx = numString.charAt(5) - '0';
+            cornerIdx = (numString.charAt(5) - '0') % 4;
+            goClockwise = (numString.charAt(5) - '0') >= 4;
             robotRole = messageType;
         }
         else if (messageType == 2 && robotRole != 4) {
@@ -672,5 +762,45 @@ public class RobotPlayer {
         }
 
         return complete;
+    }
+
+    public static void sendPaintToMoneyTower(RobotController rc) throws GameActionException{
+        RobotInfo[] nearbyRobots = rc.senseNearbyRobots();
+        for (RobotInfo robot : nearbyRobots) {
+            if (isMoneyTower(robot) && !isTowerMaxLevel(robot)) {
+                int moneyTowerPaint = robot.getPaintAmount();
+                if (moneyTowerPaint < 200) {
+                    int currPaint = rc.getPaint();
+                    if (currPaint > (200 - moneyTowerPaint)) {
+                        currPaint = 200 - moneyTowerPaint;
+                    }
+                    rc.transferPaint(robot.location, -currPaint);
+                }
+            }
+        }
+    }
+
+    public static boolean isAreaCoveredInEnemyPaint(RobotController rc) throws GameActionException {
+        MapInfo[] nearbyMapInfos = rc.senseNearbyMapInfos(3);
+        int enemyPaintAmount = 0;
+        int totalArea = 0;
+        for (MapInfo tile : nearbyMapInfos) {
+            if (tile.getPaint().isEnemy()) {
+                enemyPaintAmount++;
+            }
+            totalArea++;
+        }
+        return enemyPaintAmount > 0.5*totalArea;
+    }
+
+    public static boolean isAreaHasTeamPaint(RobotController rc) throws GameActionException {
+        MapInfo[] nearbyMapInfos = rc.senseNearbyMapInfos(1);
+        for (MapInfo tile : nearbyMapInfos) {
+            if (tile.getPaint().isAlly()) {
+                return true;
+            }
+            
+        }
+        return false;
     }
 }
