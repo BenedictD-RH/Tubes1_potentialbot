@@ -1,4 +1,4 @@
-package towerRusher;
+package alternative_bots_1;
 
 import battlecode.common.*;
 

@@ -1,25 +1,26 @@
-package alternative_bots_2.Units;
+package main_bot.Units;
 
-import alternative_bots_2.Unit;
 import battlecode.common.Direction;
 import battlecode.common.GameActionException;
 import battlecode.common.MapInfo;
 import battlecode.common.MapLocation;
 import battlecode.common.PaintType;
 import battlecode.common.RobotInfo;
+import main_bot.Unit;
 
 public class Mopper extends Unit {
 
     private static final int RETREAT_PAINT_PCT = 5;
     private static int lastBroadcastRound = 0;
 
+    // Fungsi untuk menjalankan logika mopper
     public static void run() throws GameActionException {
         initUnit();
         processMessages();
         scanEnvironment();
         tryUpgradeNearbyTower();
 
-        // Retreat jika paint < 5%
+        // refill paint ketika paint < 5%
         int pct = (rc.getPaint() * 100) / rc.getType().paintCapacity;
         if (pct <= RETREAT_PAINT_PCT) {
             if (rc.isMovementReady()) refillPaint();
@@ -48,13 +49,12 @@ public class Mopper extends Unit {
             }
         }
 
-        // Bergerak: arah enemy paint terbanyak → fallback explore
+        // Bergerak
         if (rc.isMovementReady()) {
             Direction pushDir = directionTowardMostEnemyPaint();
             if (pushDir != null && rc.canMove(pushDir)) {
                 rc.move(pushDir);
             } else {
-                // Fallback: target dari broadcast atau explore
                 MapLocation moveTarget = findMoveTarget();
                 if (moveTarget != null) {
                     bugNavigateTo(moveTarget);
@@ -70,7 +70,7 @@ public class Mopper extends Unit {
         }
     }
 
-    // Mop swing ke arah cardinal dengan musuh terbanyak
+    // Fungsi untuk mop swing ke arah cardinal dengan musuh terbanyak (min 2 hit)
     private static boolean tryMopSwing() throws GameActionException {
         RobotInfo[] enemies = rc.senseNearbyRobots(2, rc.getTeam().opponent());
         if (enemies.length < 2) return false;
@@ -100,7 +100,7 @@ public class Mopper extends Unit {
         return false;
     }
 
-    // Attack: robot musuh → tile enemy paint
+    // Fungsi untuk menyerang
     private static boolean tryAttackTarget() throws GameActionException {
         MapLocation myLoc = rc.getLocation();
 
@@ -129,7 +129,6 @@ public class Mopper extends Unit {
             if (!paint.isAlly() && paint != PaintType.EMPTY) {
                 MapLocation loc = tile.getMapLocation();
                 if (!rc.canAttack(loc)) continue;
-                // Bonus score jika ada robot musuh di tile
                 int score = 10;
                 if (rc.canSenseRobotAtLocation(loc)) {
                     RobotInfo r = rc.senseRobotAtLocation(loc);
@@ -146,7 +145,7 @@ public class Mopper extends Unit {
         return false;
     }
 
-    // Transfer paint ke teman yang kritis
+    // Fungsi untuk transfer paint ke ally yang kritis (beri 25% milik sendiri)
     private static boolean tryTransferPaint() throws GameActionException {
         int myPct = (rc.getPaint() * 100) / rc.getType().paintCapacity;
         if (myPct < 50) return false;
@@ -167,7 +166,7 @@ public class Mopper extends Unit {
         return false;
     }
 
-    // Arah menuju konsentrasi enemy paint terbanyak
+    // Fungsi untuk mencari arah dengan konsentrasi enemy paint terbanyak
     private static Direction directionTowardMostEnemyPaint() throws GameActionException {
         MapInfo[] tiles = rc.senseNearbyMapInfos(-1);
         int[] dirScore = new int[8];
@@ -180,7 +179,6 @@ public class Mopper extends Unit {
                 Direction toTile = myLoc.directionTo(tile.getMapLocation());
                 if (toTile == Direction.CENTER) continue;
                 dirScore[toTile.ordinal()]++;
-                // Bonus untuk tile adjacent
                 int dist = myLoc.distanceSquaredTo(tile.getMapLocation());
                 if (dist <= 4) dirScore[toTile.ordinal()] += 2;
             }
@@ -197,7 +195,7 @@ public class Mopper extends Unit {
         return bestDir;
     }
 
-    // Move target dari broadcasts
+    // Fungsi untuk mencari target pergerakan ( enemy paint -> robot musuh -> broadcast)
     private static MapLocation findMoveTarget() throws GameActionException {
         // Paint musuh terdekat dalam sensor
         MapLocation enemyPaint = findNearestEnemyPaint();
@@ -228,6 +226,7 @@ public class Mopper extends Unit {
         return null;
     }
 
+    // Fungsi untuk mencari tile enemy paint terdekat dalam sensor range
     private static MapLocation findNearestEnemyPaint() throws GameActionException {
         MapInfo[] tiles = rc.senseNearbyMapInfos(-1);
         MapLocation myLoc = rc.getLocation();

@@ -1,6 +1,5 @@
-package alternative_bots_2.Units;
+package main_bot.Units;
 
-import alternative_bots_2.Unit;
 import battlecode.common.Clock;
 import battlecode.common.Direction;
 import battlecode.common.GameActionException;
@@ -8,43 +7,47 @@ import battlecode.common.MapInfo;
 import battlecode.common.MapLocation;
 import battlecode.common.PaintType;
 import battlecode.common.RobotInfo;
+import main_bot.Unit;
 
 public class Splasher extends Unit {
 
+    // State untuk splasher
     private static final int STATE_ATTACK_TOWER = 0;
     private static final int STATE_SPLASH       = 1;
     private static final int STATE_RETREAT      = 2;
     private static final int STATE_EXPLORE      = 3;
 
-    private static int state = STATE_EXPLORE;
+    private static int state = STATE_EXPLORE; // default state
     private static MapLocation enemyTowerTarget = null;
     private static final int MIN_SPLASH_SCORE = 3;
 
+    // Fungsi untuk menjalankan splasher
     public static void run() throws GameActionException {
         initUnit();
         processMessages();
         scanEnvironment();
         tryUpgradeNearbyTower();
 
-        // Retreat jika paint < 5%
+        // Refiil paint ketika paint < 5%
         int pct = (rc.getPaint() * 100) / rc.getType().paintCapacity;
         if (pct <= 5) {
             state = STATE_RETREAT;
             refillPaint();
             return;
         }
+        // bergerak setelah paint terisi
         if (state == STATE_RETREAT && pct > 8) {
             state = STATE_EXPLORE;
         }
-
         updateState();
         executeState();
     }
 
+    // Fungsi untuk update state: cek enemy tower (sensor/cache/simetri) → splash → explore
     private static void updateState() throws GameActionException {
         if (state == STATE_RETREAT) return;
 
-        // 1. Enemy tower: sensor → cache → symmetry guess
+        // Enemy tower -> attack (sensor, cache, symmetry guess)
         RobotInfo[] enemies = rc.senseNearbyRobots(-1, rc.getTeam().opponent());
         for (RobotInfo e : enemies) {
             if (isTowerType(e.getType())) {
@@ -75,16 +78,18 @@ public class Splasher extends Unit {
             }
         }
 
-        // 2. Splash opportunity
+        // Empty ruin -> paint
         MapLocation splashTarget = findBestSafeSplashTarget();
         if (splashTarget != null) {
             state = STATE_SPLASH;
             return;
         }
 
+        // Explore
         state = STATE_EXPLORE;
     }
 
+    // Fungsi untuk menjalankan aksi sesuai state saat ini
     private static void executeState() throws GameActionException {
         switch (state) {
             case STATE_ATTACK_TOWER: executeAttackTower(); break;
@@ -129,7 +134,7 @@ public class Splasher extends Unit {
             return;
         }
 
-        // Move toward konsentrasi enemy paint
+        // Mendekati tujuan
         if (rc.isMovementReady()) {
             MapLocation enemyConcentration = findEnemyPaintConcentration();
             if (enemyConcentration != null) {
@@ -155,7 +160,6 @@ public class Splasher extends Unit {
             broadcastEnemyLocation(enemies[0].getLocation());
         }
 
-        // Opportunistic splash
         if (rc.isActionReady()) {
             MapLocation opp = findBestSafeSplashTarget();
             if (opp != null && rc.canAttack(opp)) {
@@ -187,6 +191,7 @@ public class Splasher extends Unit {
         return true;
     }
 
+    // Fungsi untuk mencari target splash terbaik yang aman (score >= 3, tidak ada ruin/ally)
     private static MapLocation findBestSafeSplashTarget() throws GameActionException {
         if (Clock.getBytecodesLeft() < 2000) return null;
         MapLocation myLoc = rc.getLocation();
@@ -210,7 +215,7 @@ public class Splasher extends Unit {
         return bestLoc;
     }
 
-    // Splash scoring: empty +1, enemy inner +4, enemy outer +2, ally 0
+    // Fungsi untuk menghitung skor splash: empty +1, enemy inner +4, enemy outer +2, ally 0
     private static int evaluateSplashScore(MapLocation center) throws GameActionException {
         int score = 0;
         MapInfo[] splashArea = rc.senseNearbyMapInfos(center, 4);
@@ -229,7 +234,7 @@ public class Splasher extends Unit {
                 }
             }
 
-            if (paint.isAlly()) continue; // skip ally tiles
+            if (paint.isAlly()) continue;
             if (paint == PaintType.EMPTY) {
                 score += 1;
             } else {
@@ -260,21 +265,20 @@ public class Splasher extends Unit {
         MapLocation best = null;
         int maxScore = 0;
 
-        // Sample tiles, find direction with most enemy paint
         for (MapInfo tile : tiles) {
             if (!tile.isPassable()) continue;
             PaintType paint = tile.getPaint();
             if (!paint.isAlly() && paint != PaintType.EMPTY) {
                 MapLocation loc = tile.getMapLocation();
                 int dist = myLoc.distanceSquaredTo(loc);
-                int score = 100 - dist; // prefer closer enemy paint
+                int score = 100 - dist;
                 if (score > maxScore) { maxScore = score; best = loc; }
             }
         }
         return best;
     }
 
-    // Fungsi utilitas
+    // Fungsi untuk mundur menjauhi target 
     private static void retreatFrom(MapLocation target) throws GameActionException {
         MapLocation myLoc = rc.getLocation();
         Direction awayDir = target.directionTo(myLoc);
